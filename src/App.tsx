@@ -6,7 +6,7 @@ import { AdminLogin } from './components/AdminLogin';
 import { AdminDashboard } from './components/AdminDashboard';
 import { api } from './services/api';
 import type { StudentInfo } from './types';
-import { Library, BookOpen, Clock, ShieldCheck, UserCheck } from 'lucide-react';
+import { Library, User, Armchair, Instagram } from 'lucide-react';
 
 export default function App() {
   const [currentTab, setCurrentTab] = useState<'student' | 'admin'>('student');
@@ -127,30 +127,42 @@ export default function App() {
       </main>
 
       {/* Footer */}
-      <footer className="mt-auto border-t border-stone-200 bg-white py-6 text-center text-xs text-stone-600">
-        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <Library className="w-4 h-4 text-amber-700" />
-            <span className="font-semibold text-stone-700">
-              Digital Library Attendance Terminal
-            </span>
-            <span className="text-stone-300">&bull;</span>
-            <span className="text-stone-600">Pure Firestore Database Driven</span>
+      <footer className="mt-auto border-t border-stone-200 bg-white py-5 text-center text-xs text-stone-600">
+        <div className="max-w-7xl mx-auto px-4 flex flex-col md:flex-row items-center justify-between gap-4">
+          <div className="flex flex-wrap items-center justify-center md:justify-start gap-2">
+            <div className="flex items-center gap-1.5 font-semibold text-stone-800">
+              <Library className="w-4 h-4 text-amber-700" />
+              <span>Digital Library</span>
+            </div>
+            <span className="text-stone-300 hidden sm:inline">&bull;</span>
+            <span className="text-stone-500 hidden sm:inline">Attendance &amp; Live Tracking</span>
           </div>
 
-          <div className="flex items-center gap-4 text-stone-600">
-            <span className="flex items-center gap-1">
-              <Clock className="w-3.5 h-3.5" />
-              <span>Real-time Log</span>
-            </span>
-            <span className="flex items-center gap-1">
-              <UserCheck className="w-3.5 h-3.5" />
-              <span>Identity Verified</span>
-            </span>
-            <span className="flex items-center gap-1">
-              <ShieldCheck className="w-3.5 h-3.5" />
-              <span>Zero-Trust Rules</span>
-            </span>
+          {/* Shahid Saleem details: Name, Seat #19, and Instagram ID */}
+          <div className="flex flex-wrap items-center justify-center gap-2.5">
+            {/* Student Name */}
+            <div className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-stone-100 border border-stone-200 rounded-full font-semibold text-stone-800 shadow-2xs">
+              <User className="w-3.5 h-3.5 text-stone-600" />
+              <span>Shahid Saleem</span>
+            </div>
+
+            {/* Seat Number with Seat Logo */}
+            <div className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 border border-amber-200 text-amber-900 rounded-full font-bold shadow-2xs">
+              <Armchair className="w-3.5 h-3.5 text-amber-700" />
+              <span>Seat 19</span>
+            </div>
+
+            {/* Instagram ID with Instagram Logo */}
+            <a
+              href="https://instagram.com/shahid6_00"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-pink-50 via-purple-50 to-amber-50 hover:from-pink-100 hover:to-amber-100 border border-pink-200 text-pink-700 hover:text-pink-900 rounded-full font-semibold transition-all shadow-2xs group cursor-pointer"
+              title="Visit Instagram: @shahid6_00"
+            >
+              <Instagram className="w-3.5 h-3.5 text-pink-600 group-hover:scale-110 transition-transform" />
+              <span>shahid6_00</span>
+            </a>
           </div>
         </div>
       </footer>
