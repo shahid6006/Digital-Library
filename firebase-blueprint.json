@@ -40,14 +40,42 @@
       },
       "required": ["id", "studentId", "action", "timestamp", "dateKey", "createdAt"]
     },
-    "AdminConfig": {
-      "title": "AdminConfig",
-      "description": "Administrative system configuration",
+    "AttendanceSession": {
+      "title": "AttendanceSession",
+      "description": "An active or completed IN-to-OUT library attendance session",
       "type": "object",
       "properties": {
-        "adminCodeHash": { "type": "string" },
+        "id": { "type": "string" },
+        "studentId": { "type": "string" },
+        "studentName": { "type": "string", "maxLength": 200 },
+        "dateKey": { "type": "string", "maxLength": 10 },
+        "inTimestamp": { "type": "string" },
+        "outTimestamp": { "type": "string" },
+        "inLocation": { "type": "object" },
+        "outLocation": { "type": "object" },
+        "lastLocation": { "type": "object" },
+        "status": { "type": "string", "enum": ["INSIDE", "OUTSIDE"] },
+        "totalMinutesInside": { "type": "number" },
+        "createdAt": { "type": "string" },
         "updatedAt": { "type": "string" }
-      }
+      },
+      "required": ["id", "studentId", "studentName", "dateKey", "inTimestamp", "status", "createdAt"]
+    },
+    "SessionLocationPoint": {
+      "title": "SessionLocationPoint",
+      "description": "A timestamped GPS coordinate recorded during an active IN session",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "sessionId": { "type": "string" },
+        "studentId": { "type": "string" },
+        "latitude": { "type": "number" },
+        "longitude": { "type": "number" },
+        "accuracy": { "type": "number" },
+        "timestamp": { "type": "string" },
+        "sequenceNumber": { "type": "number" }
+      },
+      "required": ["id", "sessionId", "studentId", "latitude", "longitude", "timestamp", "sequenceNumber"]
     }
   },
   "firestore": {
@@ -58,6 +86,14 @@
     "/attendanceEvents/{eventId}": {
       "schema": "AttendanceEvent",
       "description": "Collection of chronological attendance IN and OUT events with geo-location"
+    },
+    "/attendanceSessions/{sessionId}": {
+      "schema": "AttendanceSession",
+      "description": "Collection of active and completed IN-to-OUT attendance sessions"
+    },
+    "/attendanceSessions/{sessionId}/locations/{locationId}": {
+      "schema": "SessionLocationPoint",
+      "description": "Ordered GPS location track points for an attendance session"
     }
   }
 }

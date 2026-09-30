@@ -1,5 +1,10 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
+import {
+  getAuth,
+  setPersistence,
+  browserLocalPersistence,
+  onAuthStateChanged,
+} from 'firebase/auth';
 import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
 import localConfig from '../firebase-applet-config.json';
 
@@ -25,6 +30,11 @@ export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 
 export const auth = getAuth(app);
 
+// Ensure browserLocalPersistence so student sessions survive page refreshes, tab closures, and day boundaries
+setPersistence(auth, browserLocalPersistence).catch((err) => {
+  console.warn('Firebase setPersistence warning:', err);
+});
+
 // Test Firestore connection on boot
 async function testConnection() {
   try {
@@ -36,3 +46,5 @@ async function testConnection() {
   }
 }
 testConnection();
+
+export { onAuthStateChanged };

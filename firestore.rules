@@ -14,24 +14,32 @@ service cloud.firestore {
 
     // Students collection
     match /students/{studentId} {
-      // Reading students:
-      // Admins can read all students.
-      // Unauthenticated or student can read for login lookup / own profile
       allow read: if true;
-
-      // Only authenticated admin or system can create, update, or delete students
       allow write: if isSignedIn() || request.auth == null;
     }
 
     // Attendance events collection
     match /attendanceEvents/{eventId} {
-      // Read: Users can query their own events, admins can query all
       allow read: if true;
-
-      // Write: Anyone recording valid IN/OUT event or admin deleting
       allow create: if request.resource.data.action in ['IN', 'OUT'];
-      allow update: if false; // Events are immutable
-      allow delete: if true; // Admin deletion
+      allow update: if false;
+      allow delete: if true;
+    }
+
+    // Attendance sessions collection (active and completed IN-to-OUT sessions)
+    match /attendanceSessions/{sessionId} {
+      allow read: if true;
+      allow create: if request.resource.data.status in ['INSIDE', 'OUTSIDE'];
+      allow update: if true;
+      allow delete: if true;
+
+      // Subcollection for chronological GPS location points
+      match /locations/{locationId} {
+        allow read: if true;
+        allow create: if true;
+        allow update: if false;
+        allow delete: if true;
+      }
     }
   }
 }

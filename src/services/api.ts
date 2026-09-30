@@ -7,6 +7,8 @@ import type {
   RegisteredStudentItem,
   LocationData,
   ActivityEvent,
+  AttendanceSession,
+  SessionLocationPoint,
 } from '../types';
 
 export const api = {
@@ -42,7 +44,7 @@ export const api = {
       throw new Error('Not logged in. Session expired.');
     }
 
-    const { status, lastEvent } = await firebaseService.getStudentCurrentStatus(activeStudentId);
+    const { status, lastEvent, activeSession } = await firebaseService.getStudentCurrentStatus(activeStudentId);
     const nowIso = new Date().toISOString();
     const dateKey = computeDateKey(nowIso);
     const todayEvents = await firebaseService.getStudentTodayEvents(activeStudentId, dateKey);
@@ -52,9 +54,20 @@ export const api = {
       throw new Error('Student account not found or inactive.');
     }
 
+    let activeRoute: SessionLocationPoint[] = [];
+    if (activeSession) {
+      try {
+        activeRoute = await firebaseService.getSessionLocations(activeSession.id);
+      } catch (err) {
+        console.warn('Failed to load initial active route:', err);
+      }
+    }
+
     return {
       student: studentInfo,
       currentStatus: status,
+      activeSession,
+      activeRoute,
       lastEvent: lastEvent
         ? {
             action: lastEvent.action,
@@ -77,6 +90,7 @@ export const api = {
     success: boolean;
     message: string;
     currentStatus: 'INSIDE' | 'OUTSIDE';
+    session?: AttendanceSession | null;
     event: ActivityEvent;
     todayEvents: ActivityEvent[];
   }> {
@@ -88,12 +102,34 @@ export const api = {
     const studentInfo = await firebaseService.restoreStudentSession();
     const name = studentName || studentInfo?.fullName || 'Student';
 
-    const { event, newStatus } = await firebaseService.recordAttendance(
-      activeStudentId,
-      name,
-      action,
-      location
-    );
+    let event: ActivityEvent;
+    let newStatus: 'INSIDE' | 'OUTSIDE';
+    let session: AttendanceSession | null = null;
+
+    if (action === 'IN') {
+      if (!location || typeof location.latitude !== 'number' || typeof location.longitude !== 'number') {
+        throw new Error('A fresh GPS position is required to mark IN. Please enable location access.');
+      }
+
+      const res = await firebaseService.startAttendanceSession(activeStudentId, name, location);
+      event = res.event;
+      session = res.session;
+      newStatus = 'INSIDE';
+    } else {
+      // Action OUT
+      const currentActiveSession = await firebaseService.getActiveSession(activeStudentId);
+      if (!currentActiveSession) {
+        // Fallback to legacy recordAttendance if no active session doc was found
+        const res = await firebaseService.recordAttendance(activeStudentId, name, 'OUT', location);
+        event = res.event;
+        newStatus = 'OUTSIDE';
+      } else {
+        const res = await firebaseService.endAttendanceSession(activeStudentId, currentActiveSession.id, location);
+        event = res.event;
+        session = res.session;
+        newStatus = 'OUTSIDE';
+      }
+    }
 
     const nowIso = new Date().toISOString();
     const dateKey = computeDateKey(nowIso);
@@ -103,9 +139,40 @@ export const api = {
       success: true,
       message: `Successfully marked ${action} at ${event.timeFormatted}.`,
       currentStatus: newStatus,
+      session,
       event,
       todayEvents,
     };
+  },
+
+  async recordLocationWaypoint(
+    sessionId: string,
+    studentId: string,
+    location: LocationData,
+    sequenceNumber: number
+  ): Promise<SessionLocationPoint> {
+    return firebaseService.recordSessionLocationPoint(sessionId, studentId, location, sequenceNumber);
+  },
+
+  subscribeToSessionRoute(
+    sessionId: string,
+    callback: (points: SessionLocationPoint[]) => void
+  ): () => void {
+    return firebaseService.subscribeToSessionRoute(sessionId, callback);
+  },
+
+  subscribeToActiveLiveSessions(
+    callback: (sessions: AttendanceSession[]) => void
+  ): () => void {
+    return firebaseService.subscribeToActiveLiveSessions(callback);
+  },
+
+  async getSessionLocations(sessionId: string): Promise<SessionLocationPoint[]> {
+    return firebaseService.getSessionLocations(sessionId);
+  },
+
+  async getStudentSessionsForDate(studentId: string, dateKey: string): Promise<AttendanceSession[]> {
+    return firebaseService.getStudentSessionsForDate(studentId, dateKey);
   },
 
   async studentLogout(): Promise<void> {
@@ -144,7 +211,6 @@ export const api = {
           resolve(report);
         }
       );
-      // Timeout guard
       setTimeout(() => {
         unsub();
         reject(new Error('Timeout loading attendance report.'));

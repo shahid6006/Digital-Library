@@ -22,6 +22,7 @@ import { StudentHistoryModal } from './StudentHistoryModal';
 import { StudentManagement } from './StudentManagement';
 import { LocationModal } from './LocationModal';
 import { LocationHistoryView } from './LocationHistoryView';
+import { AdminLiveMapView } from './AdminLiveMapView';
 
 interface AdminDashboardProps {
   onLogout: () => void;
@@ -61,8 +62,8 @@ function formatDateDisplay(dateKey: string): string {
 }
 
 export function AdminDashboard({ onLogout }: AdminDashboardProps) {
-  // Navigation between Daily Attendance view, Location History view, and Student Management view
-  const [adminView, setAdminView] = useState<'attendance' | 'location_history' | 'management'>('attendance');
+  // Navigation between Daily Attendance view, Live GPS Map view, Location History view, and Student Management view
+  const [adminView, setAdminView] = useState<'attendance' | 'live_map' | 'location_history' | 'management'>('attendance');
 
   const [selectedDate, setSelectedDate] = useState<string>(getTodayDateKey());
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -210,6 +211,18 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
           </button>
           <button
             type="button"
+            onClick={() => setAdminView('live_map')}
+            className={`flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-md transition cursor-pointer ${
+              adminView === 'live_map'
+                ? 'bg-white text-stone-900 shadow-2xs'
+                : 'text-stone-600 hover:text-stone-900'
+            }`}
+          >
+            <Radio className="w-3.5 h-3.5 text-emerald-600 animate-pulse" />
+            <span>Live GPS Map</span>
+          </button>
+          <button
+            type="button"
             onClick={() => setAdminView('location_history')}
             className={`flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-md transition cursor-pointer ${
               adminView === 'location_history'
@@ -260,6 +273,8 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
       {/* Render Selected View */}
       {adminView === 'management' ? (
         <StudentManagement />
+      ) : adminView === 'live_map' ? (
+        <AdminLiveMapView />
       ) : adminView === 'location_history' ? (
         <LocationHistoryView />
       ) : (

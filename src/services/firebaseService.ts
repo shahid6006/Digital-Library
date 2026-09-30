@@ -12,12 +12,12 @@ import {
   limit,
   onSnapshot,
   writeBatch,
-  serverTimestamp,
 } from 'firebase/firestore';
 import {
   signInAnonymously,
   onAuthStateChanged,
   signOut,
+  type User,
 } from 'firebase/auth';
 import { db, auth } from '../firebase';
 import { hashPassword, verifyPassword } from './crypto';
@@ -29,6 +29,8 @@ import type {
   StudentDayRow,
   LocationData,
   StudentHistoryResponse,
+  AttendanceSession,
+  SessionLocationPoint,
 } from '../types';
 
 export enum OperationType {
@@ -122,15 +124,27 @@ const AUTH_STUDENT_ID_KEY = 'lib_auth_student_id';
 const ADMIN_AUTH_KEY = 'lib_admin_authenticated';
 
 export const firebaseService = {
-  // Ensure anonymous auth ready if needed
-  async ensureAuthReady() {
-    if (!auth.currentUser) {
-      try {
-        await signInAnonymously(auth);
-      } catch (err) {
-        console.warn('Anonymous auth sign-in warning:', err);
-      }
+  // Ensure anonymous auth ready with persistent session
+  async ensureAuthReady(): Promise<User> {
+    if (auth.currentUser) {
+      return auth.currentUser;
     }
+    return new Promise((resolve, reject) => {
+      const unsub = onAuthStateChanged(auth, async (user) => {
+        unsub();
+        if (user) {
+          resolve(user);
+        } else {
+          try {
+            const cred = await signInAnonymously(auth);
+            resolve(cred.user);
+          } catch (err) {
+            console.warn('Anonymous sign-in warning:', err);
+            reject(err);
+          }
+        }
+      });
+    });
   },
 
   // --------------------------------------------------------------------------
@@ -154,7 +168,7 @@ export const firebaseService = {
   },
 
   // --------------------------------------------------------------------------
-  // STUDENT AUTHENTICATION & SESSION PERSISTENCE (Requirement 7 & 8)
+  // STUDENT AUTHENTICATION & SESSION PERSISTENCE (Requirement 1 & 7)
   // --------------------------------------------------------------------------
   getSavedStudentId(): string | null {
     return localStorage.getItem(AUTH_STUDENT_ID_KEY);
@@ -162,15 +176,30 @@ export const firebaseService = {
 
   /**
    * Restores authenticated student on website open / page reload.
-   * Checks Firestore document to ensure student is still active & not deleted.
+   * Checks Firebase Auth and Firestore to ensure student is still active & not deleted.
+   * Student stays logged in across days, refreshes, tab closures!
    */
   async restoreStudentSession(): Promise<StudentInfo | null> {
-    await this.ensureAuthReady();
-    const savedId = this.getSavedStudentId();
-    if (!savedId) return null;
-
     try {
-      const stuRef = doc(db, 'students', savedId);
+      const user = await this.ensureAuthReady();
+      const savedId = this.getSavedStudentId();
+
+      // If we have a saved student ID, verify against Firestore
+      let targetStudentId = savedId;
+
+      if (!targetStudentId && user) {
+        // Query student by authUid
+        const q = query(collection(db, 'students'), where('authUid', '==', user.uid), limit(1));
+        const snap = await getDocs(q);
+        if (!snap.empty) {
+          targetStudentId = snap.docs[0].id;
+          localStorage.setItem(AUTH_STUDENT_ID_KEY, targetStudentId);
+        }
+      }
+
+      if (!targetStudentId) return null;
+
+      const stuRef = doc(db, 'students', targetStudentId);
       const snap = await getDoc(stuRef);
       if (!snap.exists()) {
         localStorage.removeItem(AUTH_STUDENT_ID_KEY);
@@ -181,6 +210,7 @@ export const firebaseService = {
         localStorage.removeItem(AUTH_STUDENT_ID_KEY);
         return null;
       }
+
       return {
         id: snap.id,
         firstName: data.firstName,
@@ -197,9 +227,10 @@ export const firebaseService = {
 
   /**
    * Student Login using First Name + Last Name + Password
+   * Automatically establishes persistent Firebase Authentication session.
    */
   async studentLogin(firstName: string, lastName: string, passwordRaw: string): Promise<StudentInfo> {
-    await this.ensureAuthReady();
+    const user = await this.ensureAuthReady();
 
     if (!passwordRaw || passwordRaw.trim().length === 0) {
       throw new Error('Please enter your password.');
@@ -231,7 +262,17 @@ export const firebaseService = {
       throw new Error('Incorrect password. Please verify and try again.');
     }
 
-    // Persist student session
+    // Link student record to persistent Firebase Auth UID
+    try {
+      await updateDoc(docSnap.ref, {
+        authUid: user.uid,
+        lastLoginAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      console.warn('Failed to update student authUid:', err);
+    }
+
+    // Persist student session ID
     localStorage.setItem(AUTH_STUDENT_ID_KEY, docSnap.id);
 
     return {
@@ -254,83 +295,49 @@ export const firebaseService = {
   },
 
   // --------------------------------------------------------------------------
-  // STUDENT STATUS & ATTENDANCE (Requirements 9 & 10)
+  // LIVE GPS & ATTENDANCE SESSION MANAGEMENT (Requirement 2, 3, 4, 7, 8, 9)
   // --------------------------------------------------------------------------
 
   /**
-   * Queries Firestore for the student's latest attendance event to determine
-   * their true current status ('INSIDE' vs 'OUTSIDE').
+   * Checks if student currently has an active attendance session (status: 'INSIDE')
    */
-  async getStudentCurrentStatus(studentId: string): Promise<{
-    status: 'INSIDE' | 'OUTSIDE';
-    lastEvent: ActivityEvent | null;
-  }> {
+  async getActiveSession(studentId: string): Promise<AttendanceSession | null> {
     await this.ensureAuthReady();
-
     try {
       const q = query(
-        collection(db, 'attendanceEvents'),
+        collection(db, 'attendanceSessions'),
         where('studentId', '==', studentId),
-        orderBy('timestamp', 'desc'),
+        where('status', '==', 'INSIDE'),
+        orderBy('createdAt', 'desc'),
         limit(1)
       );
       const snap = await getDocs(q);
-
-      if (snap.empty) {
-        return { status: 'OUTSIDE', lastEvent: null };
-      }
+      if (snap.empty) return null;
 
       const docSnap = snap.docs[0];
       const data = docSnap.data();
-      const lastEvent: ActivityEvent = {
-        id: docSnap.id,
-        action: data.action,
-        timestamp: data.timestamp,
-        timeFormatted: formatLocalTime(data.timestamp),
-        location: data.location || null,
-      };
-
       return {
-        status: data.action === 'IN' ? 'INSIDE' : 'OUTSIDE',
-        lastEvent,
+        id: docSnap.id,
+        studentId: data.studentId,
+        studentName: data.studentName,
+        dateKey: data.dateKey,
+        inTimestamp: data.inTimestamp,
+        outTimestamp: data.outTimestamp || null,
+        inLocation: data.inLocation || null,
+        outLocation: data.outLocation || null,
+        lastLocation: data.lastLocation || null,
+        status: data.status,
+        totalMinutesInside: data.totalMinutesInside || null,
+        createdAt: data.createdAt,
+        updatedAt: data.updatedAt,
       };
     } catch (err) {
-      handleFirestoreError(err, OperationType.GET, 'attendanceEvents');
+      handleFirestoreError(err, OperationType.GET, 'attendanceSessions');
     }
   },
 
   /**
-   * Fetches today's events for a specific student
-   */
-  async getStudentTodayEvents(studentId: string, dateKey: string): Promise<ActivityEvent[]> {
-    await this.ensureAuthReady();
-
-    try {
-      const q = query(
-        collection(db, 'attendanceEvents'),
-        where('studentId', '==', studentId),
-        where('dateKey', '==', dateKey),
-        orderBy('timestamp', 'asc')
-      );
-      const snap = await getDocs(q);
-
-      return snap.docs.map((docSnap) => {
-        const d = docSnap.data();
-        return {
-          id: docSnap.id,
-          action: d.action,
-          timestamp: d.timestamp,
-          timeFormatted: formatLocalTime(d.timestamp),
-          location: d.location || null,
-        };
-      });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.GET, 'attendanceEvents');
-    }
-  },
-
-  /**
-   * Records an attendance event (IN or OUT) with location capture
+   * Fallback direct single attendance event recording
    */
   async recordAttendance(
     studentId: string,
@@ -343,20 +350,10 @@ export const firebaseService = {
   }> {
     await this.ensureAuthReady();
 
-    // Verify student is active in Firestore
     const stuRef = doc(db, 'students', studentId);
     const stuSnap = await getDoc(stuRef);
     if (!stuSnap.exists() || !stuSnap.data().active) {
       throw new Error('Your library registration is currently inactive. Please contact the administrator.');
-    }
-
-    // Check current status in Firestore to strictly enforce alternating sequence
-    const { status: currentStatus } = await this.getStudentCurrentStatus(studentId);
-    if (requestedAction === 'IN' && currentStatus === 'INSIDE') {
-      throw new Error('Invalid action: You are already marked INSIDE the library.');
-    }
-    if (requestedAction === 'OUT' && currentStatus === 'OUTSIDE') {
-      throw new Error('Invalid action: You are already marked OUTSIDE the library.');
     }
 
     const now = new Date();
@@ -402,6 +399,467 @@ export const firebaseService = {
     };
   },
 
+  /**
+   * Starts an attendance session when student presses IN.
+   * Real GPS tracking is initiated.
+   */
+  async startAttendanceSession(
+    studentId: string,
+    studentName: string,
+    inLocation: LocationData
+  ): Promise<{
+    session: AttendanceSession;
+    event: ActivityEvent;
+  }> {
+    await this.ensureAuthReady();
+
+    // Verify student is active in Firestore
+    const stuRef = doc(db, 'students', studentId);
+    const stuSnap = await getDoc(stuRef);
+    if (!stuSnap.exists() || !stuSnap.data().active) {
+      throw new Error('Your library registration is currently inactive. Please contact the administrator.');
+    }
+
+    // Check if an active session already exists
+    const existing = await this.getActiveSession(studentId);
+    if (existing) {
+      throw new Error('Invalid action: You are already marked INSIDE with an active attendance session.');
+    }
+
+    const now = new Date();
+    const inTimestamp = now.toISOString();
+    const dateKey = computeDateKey(inTimestamp);
+    const sessionId = `sess_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    const eventId = `evt_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+
+    const sessionPayload: AttendanceSession = {
+      id: sessionId,
+      studentId,
+      studentName,
+      dateKey,
+      inTimestamp,
+      outTimestamp: null,
+      inLocation: {
+        latitude: inLocation.latitude,
+        longitude: inLocation.longitude,
+        accuracy: inLocation.accuracy,
+      },
+      outLocation: null,
+      lastLocation: {
+        latitude: inLocation.latitude,
+        longitude: inLocation.longitude,
+        accuracy: inLocation.accuracy,
+        timestamp: inTimestamp,
+      },
+      status: 'INSIDE',
+      totalMinutesInside: null,
+      createdAt: inTimestamp,
+      updatedAt: inTimestamp,
+    };
+
+    // 1. Create session document in Firestore
+    try {
+      await setDoc(doc(db, 'attendanceSessions', sessionId), sessionPayload);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, `attendanceSessions/${sessionId}`);
+    }
+
+    // 2. Save initial waypoint in locations subcollection
+    const initialLocationPoint: SessionLocationPoint = {
+      id: 'loc_0',
+      sessionId,
+      studentId,
+      latitude: inLocation.latitude,
+      longitude: inLocation.longitude,
+      accuracy: inLocation.accuracy,
+      timestamp: inTimestamp,
+      sequenceNumber: 0,
+    };
+
+    try {
+      await setDoc(
+        doc(db, 'attendanceSessions', sessionId, 'locations', 'loc_0'),
+        initialLocationPoint
+      );
+    } catch (err) {
+      console.warn('Initial location point save warning:', err);
+    }
+
+    // 3. Record attendance event for legacy and date-wise summary reporting
+    const eventPayload = {
+      id: eventId,
+      studentId,
+      studentName,
+      action: 'IN',
+      timestamp: inTimestamp,
+      dateKey,
+      location: sessionPayload.inLocation,
+      createdAt: inTimestamp,
+    };
+    try {
+      await setDoc(doc(db, 'attendanceEvents', eventId), eventPayload);
+    } catch (err) {
+      console.warn('AttendanceEvent write warning:', err);
+    }
+
+    const event: ActivityEvent = {
+      id: eventId,
+      action: 'IN',
+      timestamp: inTimestamp,
+      timeFormatted: formatLocalTime(inTimestamp),
+      location: sessionPayload.inLocation,
+    };
+
+    return {
+      session: sessionPayload,
+      event,
+    };
+  },
+
+  /**
+   * Saves a valid live GPS waypoint to the active session's locations subcollection
+   * and updates lastLocation on the session document for real-time monitoring.
+   */
+  async recordSessionLocationPoint(
+    sessionId: string,
+    studentId: string,
+    location: LocationData,
+    sequenceNumber: number
+  ): Promise<SessionLocationPoint> {
+    await this.ensureAuthReady();
+
+    const timestamp = new Date().toISOString();
+    const pointId = `loc_${Date.now()}_${sequenceNumber}`;
+
+    const point: SessionLocationPoint = {
+      id: pointId,
+      sessionId,
+      studentId,
+      latitude: location.latitude,
+      longitude: location.longitude,
+      accuracy: location.accuracy,
+      timestamp,
+      sequenceNumber,
+    };
+
+    try {
+      // Write subcollection point
+      await setDoc(doc(db, 'attendanceSessions', sessionId, 'locations', pointId), point);
+
+      // Update session lastLocation
+      await updateDoc(doc(db, 'attendanceSessions', sessionId), {
+        lastLocation: {
+          latitude: location.latitude,
+          longitude: location.longitude,
+          accuracy: location.accuracy,
+          timestamp,
+        },
+        updatedAt: timestamp,
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `attendanceSessions/${sessionId}/locations`);
+    }
+
+    return point;
+  },
+
+  /**
+   * Completes attendance session when student presses OUT.
+   * Stops live tracking and preserves historical route.
+   */
+  async endAttendanceSession(
+    studentId: string,
+    sessionId: string,
+    outLocation?: LocationData | null
+  ): Promise<{
+    session: AttendanceSession;
+    event: ActivityEvent;
+  }> {
+    await this.ensureAuthReady();
+
+    const sessRef = doc(db, 'attendanceSessions', sessionId);
+    const sessSnap = await getDoc(sessRef);
+    if (!sessSnap.exists()) {
+      throw new Error('Active session not found.');
+    }
+    const currentData = sessSnap.data() as AttendanceSession;
+
+    if (currentData.status === 'OUTSIDE') {
+      throw new Error('Invalid action: This session is already closed.');
+    }
+
+    const now = new Date();
+    const outTimestamp = now.toISOString();
+    const inTime = new Date(currentData.inTimestamp).getTime();
+    const outTime = now.getTime();
+    const totalMinutesInside = Math.max(0, Math.round((outTime - inTime) / (1000 * 60)));
+
+    const eventId = `evt_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+
+    const outLocObj =
+      outLocation && typeof outLocation.latitude === 'number'
+        ? {
+            latitude: outLocation.latitude,
+            longitude: outLocation.longitude,
+            accuracy: outLocation.accuracy,
+          }
+        : currentData.lastLocation
+        ? {
+            latitude: currentData.lastLocation.latitude,
+            longitude: currentData.lastLocation.longitude,
+            accuracy: currentData.lastLocation.accuracy,
+          }
+        : null;
+
+    // Save final waypoint if location available
+    if (outLocObj) {
+      try {
+        const finalLocId = `loc_final_${Date.now()}`;
+        await setDoc(doc(db, 'attendanceSessions', sessionId, 'locations', finalLocId), {
+          id: finalLocId,
+          sessionId,
+          studentId,
+          latitude: outLocObj.latitude,
+          longitude: outLocObj.longitude,
+          accuracy: outLocObj.accuracy,
+          timestamp: outTimestamp,
+          sequenceNumber: 999999,
+        });
+      } catch (err) {
+        console.warn('Final location point write warning:', err);
+      }
+    }
+
+    // Update session document
+    const updatePayload = {
+      status: 'OUTSIDE',
+      outTimestamp,
+      outLocation: outLocObj,
+      lastLocation: outLocObj
+        ? {
+            ...outLocObj,
+            timestamp: outTimestamp,
+          }
+        : currentData.lastLocation,
+      totalMinutesInside,
+      updatedAt: outTimestamp,
+    };
+
+    try {
+      await updateDoc(sessRef, updatePayload);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `attendanceSessions/${sessionId}`);
+    }
+
+    // Record OUT event in attendanceEvents
+    const eventPayload = {
+      id: eventId,
+      studentId,
+      studentName: currentData.studentName,
+      action: 'OUT',
+      timestamp: outTimestamp,
+      dateKey: currentData.dateKey,
+      location: outLocObj,
+      createdAt: outTimestamp,
+    };
+    try {
+      await setDoc(doc(db, 'attendanceEvents', eventId), eventPayload);
+    } catch (err) {
+      console.warn('AttendanceEvents write warning:', err);
+    }
+
+    const event: ActivityEvent = {
+      id: eventId,
+      action: 'OUT',
+      timestamp: outTimestamp,
+      timeFormatted: formatLocalTime(outTimestamp),
+      location: outLocObj,
+    };
+
+    return {
+      session: {
+        ...currentData,
+        ...updatePayload,
+      } as AttendanceSession,
+      event,
+    };
+  },
+
+  /**
+   * Real-time subscription to route waypoints of an attendance session
+   */
+  subscribeToSessionRoute(
+    sessionId: string,
+    callback: (points: SessionLocationPoint[]) => void
+  ): () => void {
+    const q = query(
+      collection(db, 'attendanceSessions', sessionId, 'locations'),
+      orderBy('sequenceNumber', 'asc')
+    );
+    return onSnapshot(
+      q,
+      (snap) => {
+        const points = snap.docs.map((d) => d.data() as SessionLocationPoint);
+        callback(points);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.LIST, `attendanceSessions/${sessionId}/locations`);
+      }
+    );
+  },
+
+  /**
+   * Fetches all route waypoints for a specific session
+   */
+  async getSessionLocations(sessionId: string): Promise<SessionLocationPoint[]> {
+    await this.ensureAuthReady();
+    try {
+      const q = query(
+        collection(db, 'attendanceSessions', sessionId, 'locations'),
+        orderBy('sequenceNumber', 'asc')
+      );
+      const snap = await getDocs(q);
+      return snap.docs.map((d) => d.data() as SessionLocationPoint);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.GET, `attendanceSessions/${sessionId}/locations`);
+    }
+  },
+
+  /**
+   * Real-time subscription to all currently active sessions (INSIDE) for Admin Live Map
+   */
+  subscribeToActiveLiveSessions(
+    callback: (sessions: AttendanceSession[]) => void
+  ): () => void {
+    const q = query(
+      collection(db, 'attendanceSessions'),
+      where('status', '==', 'INSIDE'),
+      orderBy('createdAt', 'desc')
+    );
+    return onSnapshot(
+      q,
+      (snap) => {
+        const list = snap.docs.map((d) => d.data() as AttendanceSession);
+        callback(list);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.LIST, 'attendanceSessions');
+      }
+    );
+  },
+
+  /**
+   * Fetches all attendance sessions for a specific student and date
+   */
+  async getStudentSessionsForDate(
+    studentId: string,
+    dateKey: string
+  ): Promise<AttendanceSession[]> {
+    await this.ensureAuthReady();
+    try {
+      const q = query(
+        collection(db, 'attendanceSessions'),
+        where('studentId', '==', studentId),
+        where('dateKey', '==', dateKey),
+        orderBy('inTimestamp', 'asc')
+      );
+      const snap = await getDocs(q);
+      return snap.docs.map((d) => d.data() as AttendanceSession);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.GET, 'attendanceSessions');
+    }
+  },
+
+  /**
+   * Queries Firestore for student's true current status ('INSIDE' vs 'OUTSIDE')
+   * Checks both active attendance sessions and latest attendance events.
+   */
+  async getStudentCurrentStatus(studentId: string): Promise<{
+    status: 'INSIDE' | 'OUTSIDE';
+    lastEvent: ActivityEvent | null;
+    activeSession: AttendanceSession | null;
+  }> {
+    await this.ensureAuthReady();
+
+    const activeSession = await this.getActiveSession(studentId);
+    if (activeSession) {
+      const lastEvent: ActivityEvent = {
+        id: activeSession.id,
+        action: 'IN',
+        timestamp: activeSession.inTimestamp,
+        timeFormatted: formatLocalTime(activeSession.inTimestamp),
+        location: activeSession.lastLocation || activeSession.inLocation || null,
+      };
+      return {
+        status: 'INSIDE',
+        lastEvent,
+        activeSession,
+      };
+    }
+
+    try {
+      const q = query(
+        collection(db, 'attendanceEvents'),
+        where('studentId', '==', studentId),
+        orderBy('timestamp', 'desc'),
+        limit(1)
+      );
+      const snap = await getDocs(q);
+
+      if (snap.empty) {
+        return { status: 'OUTSIDE', lastEvent: null, activeSession: null };
+      }
+
+      const docSnap = snap.docs[0];
+      const data = docSnap.data();
+      const lastEvent: ActivityEvent = {
+        id: docSnap.id,
+        action: data.action,
+        timestamp: data.timestamp,
+        timeFormatted: formatLocalTime(data.timestamp),
+        location: data.location || null,
+      };
+
+      return {
+        status: data.action === 'IN' ? 'INSIDE' : 'OUTSIDE',
+        lastEvent,
+        activeSession: null,
+      };
+    } catch (err) {
+      handleFirestoreError(err, OperationType.GET, 'attendanceEvents');
+    }
+  },
+
+  /**
+   * Fetches today's events for a specific student
+   */
+  async getStudentTodayEvents(studentId: string, dateKey: string): Promise<ActivityEvent[]> {
+    await this.ensureAuthReady();
+
+    try {
+      const q = query(
+        collection(db, 'attendanceEvents'),
+        where('studentId', '==', studentId),
+        where('dateKey', '==', dateKey),
+        orderBy('timestamp', 'asc')
+      );
+      const snap = await getDocs(q);
+
+      return snap.docs.map((docSnap) => {
+        const d = docSnap.data();
+        return {
+          id: docSnap.id,
+          action: d.action,
+          timestamp: d.timestamp,
+          timeFormatted: formatLocalTime(d.timestamp),
+          location: d.location || null,
+        };
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.GET, 'attendanceEvents');
+    }
+  },
+
   // --------------------------------------------------------------------------
   // ADMIN STUDENT MANAGEMENT (Requirements 1, 2, 3, 4, 5, 12)
   // --------------------------------------------------------------------------
@@ -421,7 +879,6 @@ export const firebaseService = {
           return;
         }
 
-        // Fetch counts and latest action for each student
         const list: RegisteredStudentItem[] = await Promise.all(
           studentDocs.map(async (docSnap) => {
             const data = docSnap.data();
@@ -528,7 +985,7 @@ export const firebaseService = {
   },
 
   /**
-   * Permanently deletes a student and all associated attendance events from Firestore
+   * Permanently deletes a student and all associated attendance events and sessions
    */
   async deleteStudent(studentId: string): Promise<void> {
     await this.ensureAuthReady();
@@ -545,7 +1002,18 @@ export const firebaseService = {
         await batch.commit();
       }
 
-      // 2. Delete the student document
+      // 2. Delete all attendance sessions
+      const sessQ = query(collection(db, 'attendanceSessions'), where('studentId', '==', studentId));
+      const sessSnap = await getDocs(sessQ);
+      if (!sessSnap.empty) {
+        const batch = writeBatch(db);
+        sessSnap.docs.forEach((d) => {
+          batch.delete(d.ref);
+        });
+        await batch.commit();
+      }
+
+      // 3. Delete the student document
       await deleteDoc(doc(db, 'students', studentId));
     } catch (err) {
       handleFirestoreError(err, OperationType.DELETE, `students/${studentId}`);
@@ -604,8 +1072,14 @@ export const firebaseService = {
   ): () => void {
     const studentsQ = query(collection(db, 'students'));
     const eventsQ = query(collection(db, 'attendanceEvents'), where('dateKey', '==', dateKey));
+    const activeSessionsQ = query(
+      collection(db, 'attendanceSessions'),
+      where('dateKey', '==', dateKey),
+      where('status', '==', 'INSIDE')
+    );
 
     let unsubEvents: (() => void) | null = null;
+    let unsubSessions: (() => void) | null = null;
 
     const unsubStudents = onSnapshot(
       studentsQ,
@@ -616,6 +1090,17 @@ export const firebaseService = {
         })) as any[];
 
         if (unsubEvents) unsubEvents();
+        if (unsubSessions) unsubSessions();
+
+        let activeSessionsMap = new Map<string, AttendanceSession>();
+
+        unsubSessions = onSnapshot(activeSessionsQ, (sessSnap) => {
+          activeSessionsMap = new Map<string, AttendanceSession>();
+          sessSnap.docs.forEach((d) => {
+            const sess = d.data() as AttendanceSession;
+            activeSessionsMap.set(sess.studentId, sess);
+          });
+        });
 
         unsubEvents = onSnapshot(
           eventsQ,
@@ -646,19 +1131,21 @@ export const firebaseService = {
             for (const s of allStudents) {
               const stuEvents = eventsByStudent.get(s.id) || [];
               const hasInAction = stuEvents.some((e) => e.action === 'IN');
-              const isPresent = hasInAction;
+              const hasActiveSession = activeSessionsMap.has(s.id);
+              const isPresent = hasInAction || hasActiveSession;
 
               if (isPresent) {
                 presentCount++;
               }
 
               let dailyStatus: 'INSIDE' | 'OUTSIDE' | 'ABSENT' = 'ABSENT';
-              if (isPresent) {
+              if (hasActiveSession) {
+                dailyStatus = 'INSIDE';
+              } else if (isPresent) {
                 const lastDayEvent = stuEvents[stuEvents.length - 1];
-                dailyStatus = lastDayEvent.action === 'IN' ? 'INSIDE' : 'OUTSIDE';
+                dailyStatus = lastDayEvent?.action === 'IN' ? 'INSIDE' : 'OUTSIDE';
               }
 
-              // Check latest global action for this student
               let lastAction = null;
               if (stuEvents.length > 0) {
                 const lastEvt = stuEvents[stuEvents.length - 1];
@@ -698,6 +1185,16 @@ export const firebaseService = {
                 };
               });
 
+              // If currently inside, add elapsed minutes
+              const activeSess = activeSessionsMap.get(s.id);
+              if (activeSess) {
+                const elapsedNow = Math.max(
+                  0,
+                  Math.round((Date.now() - new Date(activeSess.inTimestamp).getTime()) / (1000 * 60))
+                );
+                totalMinutesInside += elapsedNow;
+              }
+
               studentRows.push({
                 studentId: s.id,
                 firstName: s.firstName,
@@ -708,8 +1205,10 @@ export const firebaseService = {
                 isPresent,
                 lastAction,
                 events: formattedEvents,
-                totalVisits: visits,
+                totalVisits: Math.max(visits, hasActiveSession ? 1 : 0),
                 totalMinutesInside,
+                activeSessionId: activeSess?.id || null,
+                lastLocation: activeSess?.lastLocation || null,
               });
             }
 
@@ -750,11 +1249,13 @@ export const firebaseService = {
     return () => {
       unsubStudents();
       if (unsubEvents) unsubEvents();
+      if (unsubSessions) unsubSessions();
     };
   },
 
   /**
-   * Fetches full historical attendance across all days for a specific student
+   * Fetches full historical attendance across all days for a specific student,
+   * including independent sessions and route summaries
    */
   async getStudentFullHistory(studentId: string): Promise<StudentHistoryResponse> {
     await this.ensureAuthReady();
@@ -766,16 +1267,26 @@ export const firebaseService = {
     }
     const studentData = stuSnap.data();
 
-    const q = query(
+    // Fetch all events
+    const qEvents = query(
       collection(db, 'attendanceEvents'),
       where('studentId', '==', studentId),
       orderBy('timestamp', 'desc')
     );
-    const snap = await getDocs(q);
+    const eventsSnap = await getDocs(qEvents);
+
+    // Fetch all sessions
+    const qSessions = query(
+      collection(db, 'attendanceSessions'),
+      where('studentId', '==', studentId),
+      orderBy('createdAt', 'desc')
+    );
+    const sessionsSnap = await getDocs(qSessions);
 
     const dateGroups: Record<string, ActivityEvent[]> = {};
+    const sessionGroups: Record<string, AttendanceSession[]> = {};
 
-    snap.docs.forEach((docSnap) => {
+    eventsSnap.docs.forEach((docSnap) => {
       const e = docSnap.data();
       if (!dateGroups[e.dateKey]) {
         dateGroups[e.dateKey] = [];
@@ -789,14 +1300,27 @@ export const firebaseService = {
       });
     });
 
-    const groupedList = Object.keys(dateGroups)
-      .sort((a, b) => b.localeCompare(a))
-      .map((dateKey) => ({
-        dateKey,
-        events: dateGroups[dateKey].sort(
-          (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-        ),
-      }));
+    sessionsSnap.docs.forEach((docSnap) => {
+      const s = docSnap.data() as AttendanceSession;
+      if (!sessionGroups[s.dateKey]) {
+        sessionGroups[s.dateKey] = [];
+      }
+      sessionGroups[s.dateKey].push(s);
+    });
+
+    const allDates = Array.from(
+      new Set([...Object.keys(dateGroups), ...Object.keys(sessionGroups)])
+    ).sort((a, b) => b.localeCompare(a));
+
+    const groupedList = allDates.map((dateKey) => ({
+      dateKey,
+      events: (dateGroups[dateKey] || []).sort(
+        (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+      ),
+      sessions: (sessionGroups[dateKey] || []).sort(
+        (a, b) => new Date(a.inTimestamp).getTime() - new Date(b.inTimestamp).getTime()
+      ),
+    }));
 
     const { status, lastEvent } = await this.getStudentCurrentStatus(studentId);
 

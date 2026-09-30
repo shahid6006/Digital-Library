@@ -21,9 +21,43 @@ export interface ActivityEvent {
   location?: LocationData | null;
 }
 
+export interface SessionLocationPoint {
+  id: string;
+  sessionId: string;
+  studentId: string;
+  latitude: number;
+  longitude: number;
+  accuracy: number | null;
+  timestamp: string;
+  sequenceNumber: number;
+}
+
+export interface AttendanceSession {
+  id: string;
+  studentId: string;
+  studentName: string;
+  dateKey: string;
+  inTimestamp: string;
+  outTimestamp?: string | null;
+  inLocation?: LocationData | null;
+  outLocation?: LocationData | null;
+  lastLocation?: {
+    latitude: number;
+    longitude: number;
+    accuracy: number | null;
+    timestamp: string;
+  } | null;
+  status: 'INSIDE' | 'OUTSIDE';
+  totalMinutesInside?: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface StudentMeResponse {
   student: StudentInfo;
   currentStatus: 'INSIDE' | 'OUTSIDE';
+  activeSession: AttendanceSession | null;
+  activeRoute: SessionLocationPoint[];
   lastEvent: {
     action: 'IN' | 'OUT';
     timestamp: string;
@@ -59,6 +93,8 @@ export interface StudentDayRow {
   events: ActivityEvent[];
   totalVisits: number;
   totalMinutesInside: number;
+  activeSessionId?: string | null;
+  lastLocation?: LocationData | null;
 }
 
 export interface AdminAttendanceReport {
@@ -70,6 +106,7 @@ export interface AdminAttendanceReport {
 export interface StudentHistoryDayGroup {
   dateKey: string;
   events: ActivityEvent[];
+  sessions?: AttendanceSession[];
 }
 
 export interface StudentHistoryResponse {

@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#b45309" />
+      <stop offset="100%" stop-color="#78350f" />
+    </linearGradient>
+    <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fbbf24" />
+      <stop offset="100%" stop-color="#f59e0b" />
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#000000" flood-opacity="0.3" />
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="512" height="512" rx="104" fill="url(#bgGrad)" />
+
+  <!-- Inner circle safe-zone highlight -->
+  <circle cx="256" cy="256" r="190" fill="none" stroke="#fef3c7" stroke-opacity="0.15" stroke-width="2" />
+
+  <!-- Main Graphic Group -->
+  <g filter="url(#shadow)">
+    <!-- Book Base -->
+    <path d="M120 340 C170 320, 220 320, 256 342 C292 320, 342 320, 392 340 L392 210 C342 190, 292 190, 256 212 C220 190, 170 190, 120 210 Z" fill="#ffffff" />
+    <!-- Book Spine Divider -->
+    <path d="M256 212 L256 342" stroke="#d97706" stroke-width="4" stroke-linecap="round" />
+    <!-- Book Pages Detail Left -->
+    <path d="M140 318 C175 304, 215 304, 244 322" stroke="#e5e7eb" stroke-width="3" fill="none" stroke-linecap="round" />
+    <path d="M140 294 C175 280, 215 280, 244 298" stroke="#e5e7eb" stroke-width="3" fill="none" stroke-linecap="round" />
+    <!-- Book Pages Detail Right -->
+    <path d="M372 318 C337 304, 297 304, 268 322" stroke="#e5e7eb" stroke-width="3" fill="none" stroke-linecap="round" />
+    <path d="M372 294 C337 280, 297 280, 268 298" stroke="#e5e7eb" stroke-width="3" fill="none" stroke-linecap="round" />
+
+    <!-- GPS Location Pin Floating Above Book -->
+    <path d="M256 100 C223 100, 196 127, 196 160 C196 205, 256 260, 256 260 C256 260, 316 205, 316 160 C316 127, 289 100, 256 100 Z" fill="url(#accentGrad)" />
+    <!-- Inner Pin Dot -->
+    <circle cx="256" cy="160" r="18" fill="#ffffff" />
+
+    <!-- Pulse Signal Rings -->
+    <circle cx="256" cy="160" r="38" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-dasharray="4 6" opacity="0.8" />
+  </g>
+</svg>
