@@ -1,0 +1,6 @@
+{
+  "name": "Library Attendance System",
+  "description": "A modern digital entry and exit attendance system for library students and administrators with real-time tracking and historical logs.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
