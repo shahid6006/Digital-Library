@@ -1,3 +1,4 @@
+import { firebaseService, computeDateKey } from './firebaseService';
 import type {
   StudentMeResponse,
   AdminAttendanceReport,
@@ -8,94 +9,70 @@ import type {
   ActivityEvent,
 } from '../types';
 
-const STUDENT_TOKEN_KEY = 'lib_student_token';
-const ADMIN_TOKEN_KEY = 'lib_admin_token';
-const SAVED_STUDENT_INFO = 'lib_student_info';
-
-function getClientTimezone(): string {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-  } catch {
-    return 'UTC';
-  }
-}
-
-async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-  const headers = new Headers(options.headers || {});
-  headers.set('Content-Type', 'application/json');
-  headers.set('x-client-timezone', getClientTimezone());
-
-  const response = await fetch(endpoint, {
-    ...options,
-    headers,
-  });
-
-  const data = await response.json().catch(() => ({}));
-
-  if (!response.ok) {
-    const errorMsg = data.error || `Request failed with status ${response.status}`;
-    throw new Error(errorMsg);
-  }
-
-  return data as T;
-}
-
 export const api = {
-  // Session storage helpers
+  // Session checks
   getStudentToken(): string | null {
-    return localStorage.getItem(STUDENT_TOKEN_KEY);
-  },
-  setStudentToken(token: string, student: StudentInfo): void {
-    localStorage.setItem(STUDENT_TOKEN_KEY, token);
-    localStorage.setItem(SAVED_STUDENT_INFO, JSON.stringify(student));
-  },
-  clearStudentSession(): void {
-    localStorage.removeItem(STUDENT_TOKEN_KEY);
-    localStorage.removeItem(SAVED_STUDENT_INFO);
-  },
-  getCachedStudent(): StudentInfo | null {
-    const raw = localStorage.getItem(SAVED_STUDENT_INFO);
-    if (!raw) return null;
-    try {
-      return JSON.parse(raw);
-    } catch {
-      return null;
-    }
+    return firebaseService.getSavedStudentId();
   },
 
   getAdminToken(): string | null {
-    return localStorage.getItem(ADMIN_TOKEN_KEY);
+    return firebaseService.isAdminLoggedIn() ? 'adm_active' : null;
   },
-  setAdminToken(token: string): void {
-    localStorage.setItem(ADMIN_TOKEN_KEY, token);
-  },
-  clearAdminSession(): void {
-    localStorage.removeItem(ADMIN_TOKEN_KEY);
+
+  async restoreStudentSession(): Promise<StudentInfo | null> {
+    return firebaseService.restoreStudentSession();
   },
 
   // Student endpoints
-  async studentLogin(firstName: string, lastName: string, password: string): Promise<{ token: string; student: StudentInfo }> {
-    const res = await request<{ success: boolean; token: string; student: StudentInfo }>('/api/students/login', {
-      method: 'POST',
-      body: JSON.stringify({ firstName, lastName, password }),
-    });
-    this.setStudentToken(res.token, res.student);
-    return res;
+  async studentLogin(
+    firstName: string,
+    lastName: string,
+    password: string
+  ): Promise<{ token: string; student: StudentInfo }> {
+    const student = await firebaseService.studentLogin(firstName, lastName, password);
+    return {
+      token: student.id,
+      student,
+    };
   },
 
-  async getStudentMe(): Promise<StudentMeResponse> {
-    const token = this.getStudentToken();
-    if (!token) throw new Error('Not logged in');
-    return request<StudentMeResponse>('/api/students/me', {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    });
+  async getStudentMe(studentId?: string): Promise<StudentMeResponse> {
+    const activeStudentId = studentId || firebaseService.getSavedStudentId();
+    if (!activeStudentId) {
+      throw new Error('Not logged in. Session expired.');
+    }
+
+    const { status, lastEvent } = await firebaseService.getStudentCurrentStatus(activeStudentId);
+    const nowIso = new Date().toISOString();
+    const dateKey = computeDateKey(nowIso);
+    const todayEvents = await firebaseService.getStudentTodayEvents(activeStudentId, dateKey);
+
+    const studentInfo = await firebaseService.restoreStudentSession();
+    if (!studentInfo) {
+      throw new Error('Student account not found or inactive.');
+    }
+
+    return {
+      student: studentInfo,
+      currentStatus: status,
+      lastEvent: lastEvent
+        ? {
+            action: lastEvent.action,
+            timestamp: lastEvent.timestamp,
+            timeFormatted: lastEvent.timeFormatted,
+            location: lastEvent.location || null,
+          }
+        : null,
+      todayEvents,
+      serverTime: nowIso,
+    };
   },
 
   async markAttendance(
     action: 'IN' | 'OUT',
-    location?: LocationData | null
+    location?: LocationData | null,
+    studentId?: string,
+    studentName?: string
   ): Promise<{
     success: boolean;
     message: string;
@@ -103,145 +80,139 @@ export const api = {
     event: ActivityEvent;
     todayEvents: ActivityEvent[];
   }> {
-    const token = this.getStudentToken();
-    if (!token) throw new Error('Not logged in');
-    return request('/api/students/me/attendance', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ action, location }),
-    });
+    const activeStudentId = studentId || firebaseService.getSavedStudentId();
+    if (!activeStudentId) {
+      throw new Error('Not logged in. Please log in again.');
+    }
+
+    const studentInfo = await firebaseService.restoreStudentSession();
+    const name = studentName || studentInfo?.fullName || 'Student';
+
+    const { event, newStatus } = await firebaseService.recordAttendance(
+      activeStudentId,
+      name,
+      action,
+      location
+    );
+
+    const nowIso = new Date().toISOString();
+    const dateKey = computeDateKey(nowIso);
+    const todayEvents = await firebaseService.getStudentTodayEvents(activeStudentId, dateKey);
+
+    return {
+      success: true,
+      message: `Successfully marked ${action} at ${event.timeFormatted}.`,
+      currentStatus: newStatus,
+      event,
+      todayEvents,
+    };
   },
 
   async studentLogout(): Promise<void> {
-    const token = this.getStudentToken();
-    if (token) {
-      try {
-        await request('/api/students/logout', {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${token}` },
-        });
-      } catch {
-        // continue clearing local session
-      }
-    }
-    this.clearStudentSession();
+    await firebaseService.studentLogout();
   },
 
   // Admin endpoints
   async adminLogin(code: string): Promise<{ token: string }> {
-    const res = await request<{ success: boolean; token: string }>('/api/admin/login', {
-      method: 'POST',
-      body: JSON.stringify({ code }),
-    });
-    this.setAdminToken(res.token);
-    return res;
-  },
-
-  async getAdminAttendance(dateKey: string, search?: string): Promise<AdminAttendanceReport> {
-    const token = this.getAdminToken();
-    if (!token) throw new Error('Admin not authenticated');
-
-    const params = new URLSearchParams();
-    if (dateKey) params.set('date', dateKey);
-    if (search && search.trim()) params.set('search', search.trim());
-
-    return request<AdminAttendanceReport>(`/api/admin/attendance?${params.toString()}`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    });
-  },
-
-  async getRegisteredStudents(search?: string): Promise<{ students: RegisteredStudentItem[] }> {
-    const token = this.getAdminToken();
-    if (!token) throw new Error('Admin not authenticated');
-
-    const params = new URLSearchParams();
-    if (search && search.trim()) params.set('search', search.trim());
-
-    return request<{ students: RegisteredStudentItem[] }>(`/api/admin/students?${params.toString()}`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    });
-  },
-
-  async registerStudent(firstName: string, lastName: string, password: string): Promise<{ success: boolean; message: string; student: StudentInfo }> {
-    const token = this.getAdminToken();
-    if (!token) throw new Error('Admin not authenticated');
-
-    return request<{ success: boolean; message: string; student: StudentInfo }>('/api/admin/students', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ firstName, lastName, password }),
-    });
-  },
-
-  async deleteStudent(studentId: string): Promise<{ success: boolean; message: string; deletedStudent: StudentInfo }> {
-    const token = this.getAdminToken();
-    if (!token) throw new Error('Admin not authenticated');
-
-    return request<{ success: boolean; message: string; deletedStudent: StudentInfo }>(`/api/admin/students/${studentId}`, {
-      method: 'DELETE',
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    });
-  },
-
-  async resetStudentPassword(studentId: string, newPassword: string): Promise<{ success: boolean; message: string }> {
-    const token = this.getAdminToken();
-    if (!token) throw new Error('Admin not authenticated');
-
-    return request<{ success: boolean; message: string }>(`/api/admin/students/${studentId}/reset-password`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ newPassword }),
-    });
-  },
-
-  async updateStudentStatus(studentId: string, status: 'active' | 'inactive'): Promise<{ success: boolean; message: string; student: StudentInfo }> {
-    const token = this.getAdminToken();
-    if (!token) throw new Error('Admin not authenticated');
-
-    return request<{ success: boolean; message: string; student: StudentInfo }>(`/api/admin/students/${studentId}/status`, {
-      method: 'PATCH',
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ status }),
-    });
-  },
-
-  async getStudentHistory(studentId: string): Promise<StudentHistoryResponse> {
-    const token = this.getAdminToken();
-    if (!token) throw new Error('Admin not authenticated');
-
-    return request<StudentHistoryResponse>(`/api/admin/student/${studentId}/history`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    });
+    firebaseService.adminLogin(code);
+    return { token: 'adm_active' };
   },
 
   async adminLogout(): Promise<void> {
-    const token = this.getAdminToken();
-    if (token) {
-      try {
-        await request('/api/admin/logout', {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${token}` },
-        });
-      } catch {
-        // continue clearing local session
-      }
-    }
-    this.clearAdminSession();
+    firebaseService.adminLogout();
+  },
+
+  subscribeToDailyAttendance(
+    dateKey: string,
+    callback: (report: AdminAttendanceReport) => void
+  ): () => void {
+    return firebaseService.subscribeToDailyAttendance(dateKey, callback);
+  },
+
+  subscribeToRegisteredStudents(
+    callback: (students: RegisteredStudentItem[]) => void
+  ): () => void {
+    return firebaseService.subscribeToStudents(callback);
+  },
+
+  async getAdminAttendance(dateKey: string): Promise<AdminAttendanceReport> {
+    return new Promise((resolve, reject) => {
+      const unsub = firebaseService.subscribeToDailyAttendance(
+        dateKey,
+        (report) => {
+          unsub();
+          resolve(report);
+        }
+      );
+      // Timeout guard
+      setTimeout(() => {
+        unsub();
+        reject(new Error('Timeout loading attendance report.'));
+      }, 8000);
+    });
+  },
+
+  async getRegisteredStudents(): Promise<{ students: RegisteredStudentItem[] }> {
+    return new Promise((resolve, reject) => {
+      const unsub = firebaseService.subscribeToStudents((students) => {
+        unsub();
+        resolve({ students });
+      });
+      setTimeout(() => {
+        unsub();
+        reject(new Error('Timeout loading registered students.'));
+      }, 8000);
+    });
+  },
+
+  async registerStudent(
+    firstName: string,
+    lastName: string,
+    password: string
+  ): Promise<{ success: boolean; message: string; student: StudentInfo }> {
+    const student = await firebaseService.addStudent(firstName, lastName, password);
+    return {
+      success: true,
+      message: `Student "${student.fullName}" added successfully.`,
+      student,
+    };
+  },
+
+  async deleteStudent(
+    studentId: string
+  ): Promise<{ success: boolean; message: string; deletedStudent: StudentInfo }> {
+    await firebaseService.deleteStudent(studentId);
+    return {
+      success: true,
+      message: 'Student and all associated records permanently deleted from Firestore.',
+      deletedStudent: { id: studentId, firstName: '', lastName: '', fullName: '' },
+    };
+  },
+
+  async resetStudentPassword(
+    studentId: string,
+    newPassword: string
+  ): Promise<{ success: boolean; message: string }> {
+    await firebaseService.resetStudentPassword(studentId, newPassword);
+    return {
+      success: true,
+      message: 'Student password updated successfully in Firestore.',
+    };
+  },
+
+  async updateStudentStatus(
+    studentId: string,
+    status: 'active' | 'inactive'
+  ): Promise<{ success: boolean; message: string; student: StudentInfo }> {
+    await firebaseService.updateStudentStatus(studentId, status);
+    return {
+      success: true,
+      message: `Student is now ${status}.`,
+      student: { id: studentId, firstName: '', lastName: '', fullName: '', status },
+    };
+  },
+
+  async getStudentHistory(studentId: string): Promise<StudentHistoryResponse> {
+    return firebaseService.getStudentFullHistory(studentId);
   },
 };

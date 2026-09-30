@@ -83,7 +83,7 @@ export function StudentLogin({ onLoginSuccess, onSwitchToAdmin }: StudentLoginPr
               autoFocus
               value={firstName}
               onChange={(e) => setFirstName(e.target.value)}
-              placeholder="e.g. Shahid"
+              placeholder="Enter first name"
               className="w-full px-3.5 py-2.5 bg-stone-50 border border-stone-300 rounded-lg text-stone-900 placeholder-stone-400 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:bg-white transition"
               disabled={isLoading}
             />
@@ -102,7 +102,7 @@ export function StudentLogin({ onLoginSuccess, onSwitchToAdmin }: StudentLoginPr
               required
               value={lastName}
               onChange={(e) => setLastName(e.target.value)}
-              placeholder="e.g. Saleem"
+              placeholder="Enter last name"
               className="w-full px-3.5 py-2.5 bg-stone-50 border border-stone-300 rounded-lg text-stone-900 placeholder-stone-400 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:bg-white transition"
               disabled={isLoading}
             />

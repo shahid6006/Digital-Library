@@ -3,10 +3,15 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 
-// Ensure data directory exists
-const DATA_DIR = path.resolve(process.cwd(), 'data');
+// Ensure data directory exists (on Vercel serverless, only /tmp is writable)
+const isVercel = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
+const DATA_DIR = isVercel ? '/tmp' : path.resolve(process.cwd(), 'data');
 if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  } catch (err) {
+    console.error('Failed to create data directory:', err);
+  }
 }
 
 const DB_PATH = path.join(DATA_DIR, 'library.db');
@@ -14,7 +19,7 @@ export const db = new DatabaseSync(DB_PATH);
 
 // Initialize schema
 db.exec(`
-  PRAGMA journal_mode = WAL;
+  PRAGMA journal_mode = ${isVercel ? 'DELETE' : 'WAL'};
   PRAGMA foreign_keys = ON;
 
   CREATE TABLE IF NOT EXISTS students (
@@ -856,85 +861,7 @@ export function deleteAdminSession(token: string): void {
  * Seed initial sample records for demonstration and date-switching testing.
  */
 export function seedInitialDataIfNeeded() {
-  try {
-    const unreg = db.prepare("SELECT id FROM students WHERE normalized_name = 'rahul sharma'").get() as { id: string } | undefined;
-    if (unreg) {
-      db.prepare('DELETE FROM attendance_events WHERE student_id = ?').run(unreg.id);
-      db.prepare('DELETE FROM student_sessions WHERE student_id = ?').run(unreg.id);
-      db.prepare('DELETE FROM students WHERE id = ?').run(unreg.id);
-    }
-  } catch {
-    // ignore
-  }
-
-  const countStmt = db.prepare('SELECT COUNT(*) as count FROM students');
-  const res = countStmt.get() as { count: number };
-  if (res.count > 1) {
-    return;
-  }
-
-  console.log('Seeding initial library students and attendance history...');
-
-  const s1 = registerStudentByAdmin('Shahid', 'Saleem', 'shahid@777');
-  const s2 = registerStudentByAdmin('Aamir', 'Ahmad', 'aamir@777');
-  const s3 = registerStudentByAdmin('Muzahir', 'Hussain', 'muzahir@777');
-  const s4 = registerStudentByAdmin('Fatima', 'Zahra', 'fatima@777');
-  const s5 = registerStudentByAdmin('Bilal', 'Ahmad', 'bilal@777');
-
-  const now = new Date();
-  const todayKey = computeDateKey(now.toISOString());
-  const yesterdayDate = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-  const yesterdayKey = computeDateKey(yesterdayDate.toISOString());
-
-  const insertStmt = db.prepare(`
-    INSERT INTO attendance_events (id, student_id, action, timestamp, date_key, latitude, longitude, accuracy, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-
-  const addEvt = (
-    stuId: string,
-    action: 'IN' | 'OUT',
-    dateStr: string,
-    timeStr: string,
-    lat?: number,
-    lng?: number,
-    acc?: number
-  ) => {
-    const iso = `${dateStr}T${timeStr}:00.000Z`;
-    insertStmt.run(
-      `evt_${crypto.randomUUID()}`,
-      stuId,
-      action,
-      iso,
-      dateStr,
-      lat ?? null,
-      lng ?? null,
-      acc ?? null,
-      iso
-    );
-  };
-
-  // Yesterday records (2026-09-29) - historical records without location
-  addEvt(s1.id, 'IN', yesterdayKey, '08:00');
-  addEvt(s1.id, 'OUT', yesterdayKey, '12:00');
-  addEvt(s1.id, 'IN', yesterdayKey, '13:30');
-  addEvt(s1.id, 'OUT', yesterdayKey, '16:45');
-
-  addEvt(s2.id, 'IN', yesterdayKey, '08:20');
-  addEvt(s2.id, 'OUT', yesterdayKey, '10:15');
-
-  addEvt(s3.id, 'IN', yesterdayKey, '09:00');
-  addEvt(s3.id, 'OUT', yesterdayKey, '13:00');
-
-  // Today records (2026-09-30) - with sample campus library coordinates: 34.0522, -118.2437
-  addEvt(s2.id, 'IN', todayKey, '08:20', 34.0522, -118.2437, 12);
-  addEvt(s2.id, 'OUT', todayKey, '10:15', 34.0525, -118.2439, 15);
-
-  addEvt(s3.id, 'IN', todayKey, '09:00', 34.0521, -118.2435, 10);
-
-  addEvt(s4.id, 'IN', todayKey, '09:15', 34.0523, -118.2436, 8);
-  addEvt(s4.id, 'OUT', todayKey, '11:30', 34.0526, -118.2440, 14);
-  addEvt(s4.id, 'IN', todayKey, '13:00', 34.0522, -118.2437, 9);
-
-  console.log('Seed completed successfully.');
+  // Demo and hard-coded students completely removed.
+  // Database starts with 0 students unless added by an Admin.
 }
+

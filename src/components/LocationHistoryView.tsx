@@ -11,6 +11,7 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import { api } from '../services/api';
+import { firebaseService } from '../services/firebaseService';
 import type { RegisteredStudentItem, ActivityEvent } from '../types';
 import { AttendanceLocationMap } from './AttendanceLocationMap';
 
@@ -55,32 +56,28 @@ export function LocationHistoryView() {
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Load students list
+  // Subscribe to students list in real-time
   useEffect(() => {
-    async function loadStudents() {
-      try {
-        const res = await api.getRegisteredStudents();
-        setStudents(res.students);
-        if (res.students.length > 0 && !selectedStudentId) {
-          setSelectedStudentId(res.students[0].id);
-        }
-      } catch (err: any) {
-        setError(err.message || 'Unable to load students list.');
+    const unsub = api.subscribeToRegisteredStudents((stuList) => {
+      setStudents(stuList);
+      if (stuList.length > 0 && !selectedStudentId) {
+        setSelectedStudentId(stuList[0].id);
       }
-    }
-    loadStudents();
-  }, []);
+    });
+    return () => unsub();
+  }, [selectedStudentId]);
 
   // Load attendance events for selected student and date
   const loadEventsForDate = async () => {
-    if (!selectedStudentId) return;
+    if (!selectedStudentId) {
+      setEvents([]);
+      setIsLoading(false);
+      return;
+    }
     setIsLoading(true);
     setError(null);
     try {
-      // Query admin attendance for this date
-      const report = await api.getAdminAttendance(selectedDate);
-      const studentRow = report.students.find((s) => s.studentId === selectedStudentId);
-      const dayEvents = studentRow ? studentRow.events : [];
+      const dayEvents = await firebaseService.getStudentTodayEvents(selectedStudentId, selectedDate);
       setEvents(dayEvents);
       const withLoc = dayEvents.filter((e) => e.location != null);
       if (withLoc.length > 0) {

@@ -161,7 +161,7 @@ export function StudentPortal({ student, onLogout, onStatusChange }: StudentPort
     setSubmittingStep(`Location captured (±${Math.round(capturedLoc.accuracy || 0)}m). Recording attendance...`);
 
     try {
-      const res = await api.markAttendance(actionToTake, capturedLoc);
+      const res = await api.markAttendance(actionToTake, capturedLoc, student.id, student.fullName);
       setCurrentStatus(res.currentStatus);
       onStatusChange?.(res.currentStatus);
       setLastActionTime(res.event.timeFormatted);

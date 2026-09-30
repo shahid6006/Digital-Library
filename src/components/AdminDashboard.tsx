@@ -80,79 +80,30 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
     initialEventId?: string;
   } | null>(null);
 
-  // Fetch attendance data for selected date
-  const loadAttendance = async (silent = false) => {
-    if (!silent) setIsLoading(true);
-    setError(null);
+  // Real-time Firestore subscription to daily attendance for selected date
+  useEffect(() => {
+    if (adminView === 'attendance') {
+      setIsLoading(true);
+      setError(null);
+      const unsub = api.subscribeToDailyAttendance(selectedDate, (newReport) => {
+        setReport(newReport);
+        setIsLoading(false);
+      });
+      return () => unsub();
+    }
+  }, [selectedDate, adminView]);
+
+  const handleRefresh = async () => {
+    setIsLoading(true);
     try {
       const data = await api.getAdminAttendance(selectedDate);
       setReport(data);
     } catch (err: any) {
-      if (err.message && err.message.includes('expired')) {
-        onLogout();
-      } else {
-        setError(err.message || 'Failed to load attendance report.');
-      }
+      setError(err.message || 'Failed to refresh records.');
     } finally {
-      if (!silent) setIsLoading(false);
+      setIsLoading(false);
     }
   };
-
-  useEffect(() => {
-    if (adminView === 'attendance') {
-      loadAttendance();
-    }
-  }, [selectedDate, adminView]);
-
-  // Set up Server-Sent Events (SSE) for Real-Time live updates
-  useEffect(() => {
-    const token = api.getAdminToken();
-    if (!token) return;
-
-    let eventSource: EventSource | null = null;
-    try {
-      eventSource = new EventSource(`/api/admin/events?token=${encodeURIComponent(token)}`);
-
-      eventSource.onmessage = (e) => {
-        try {
-          const payload = JSON.parse(e.data);
-          if (payload.type === 'attendance_update') {
-            setLiveSyncNotification(
-              `Live update: ${payload.studentName} marked ${payload.action} at ${new Date(
-                payload.timestamp
-              ).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
-            );
-            if (adminView === 'attendance') {
-              loadAttendance(true);
-            }
-
-            setTimeout(() => {
-              setLiveSyncNotification(null);
-            }, 6000);
-          }
-        } catch {
-          // ignore heartbeat
-        }
-      };
-
-      eventSource.onerror = () => {
-        // Fallback
-      };
-    } catch {
-      // ignore
-    }
-
-    const pollInterval = setInterval(() => {
-      if (adminView === 'attendance') {
-        loadAttendance(true);
-      }
-    }, 10000);
-
-    return () => {
-      if (eventSource) eventSource.close();
-      clearInterval(pollInterval);
-    };
-  }, [selectedDate, adminView]);
 
   // Filter students based on search and status
   const filteredStudents = useMemo(() => {
@@ -295,7 +246,7 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
             </button>
             <button
               type="button"
-              onClick={() => loadAttendance(false)}
+              onClick={handleRefresh}
               className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-stone-700 bg-white hover:bg-stone-50 border border-stone-300 rounded-lg shadow-2xs transition cursor-pointer"
               title="Refresh records"
             >

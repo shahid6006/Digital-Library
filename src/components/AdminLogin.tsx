@@ -104,17 +104,7 @@ export function AdminLogin({ onLoginSuccess, onSwitchToStudent }: AdminLoginProp
           </div>
         </form>
 
-        <div className="mt-6 pt-5 border-t border-stone-100 space-y-3">
-          <div className="bg-stone-50 rounded-lg p-3 border border-stone-200/80 text-xs text-stone-600">
-            <span className="font-semibold text-stone-800">Prototype Credential:</span>
-            <div className="mt-1 font-mono text-[11px] text-amber-800 bg-amber-50/80 px-2 py-1 rounded border border-amber-200/60 inline-block">
-              Retype@77#
-            </div>
-            <p className="mt-1.5 text-[11px] text-stone-500">
-              Validated on the secure backend server.
-            </p>
-          </div>
-
+        <div className="mt-6 pt-5 border-t border-stone-100">
           {onSwitchToStudent && (
             <div className="text-center">
               <button

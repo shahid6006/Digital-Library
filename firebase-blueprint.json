@@ -1,0 +1,63 @@
+{
+  "entities": {
+    "Student": {
+      "title": "Student",
+      "description": "Registered library student account",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "firstName": { "type": "string", "maxLength": 100 },
+        "lastName": { "type": "string", "maxLength": 100 },
+        "fullName": { "type": "string", "maxLength": 200 },
+        "normalizedName": { "type": "string", "maxLength": 200 },
+        "authEmail": { "type": "string", "maxLength": 254 },
+        "authUid": { "type": "string", "maxLength": 128 },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "firstName", "lastName", "fullName", "normalizedName", "active", "createdAt"]
+    },
+    "AttendanceEvent": {
+      "title": "AttendanceEvent",
+      "description": "Library entry or exit event with GPS location coordinates",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "studentId": { "type": "string" },
+        "studentName": { "type": "string", "maxLength": 200 },
+        "action": { "type": "string", "enum": ["IN", "OUT"] },
+        "timestamp": { "type": "string" },
+        "dateKey": { "type": "string", "maxLength": 10 },
+        "location": {
+          "type": "object",
+          "properties": {
+            "latitude": { "type": "number" },
+            "longitude": { "type": "number" },
+            "accuracy": { "type": "number" }
+          }
+        },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "studentId", "action", "timestamp", "dateKey", "createdAt"]
+    },
+    "AdminConfig": {
+      "title": "AdminConfig",
+      "description": "Administrative system configuration",
+      "type": "object",
+      "properties": {
+        "adminCodeHash": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      }
+    }
+  },
+  "firestore": {
+    "/students/{studentId}": {
+      "schema": "Student",
+      "description": "Collection of all registered student profiles"
+    },
+    "/attendanceEvents/{eventId}": {
+      "schema": "AttendanceEvent",
+      "description": "Collection of chronological attendance IN and OUT events with geo-location"
+    }
+  }
+}

@@ -55,22 +55,27 @@ export function StudentManagement() {
   // History modal state
   const [selectedStudentForHistory, setSelectedStudentForHistory] = useState<string | null>(null);
 
-  const loadStudents = async (silent = false) => {
-    if (!silent) setIsLoading(true);
+  useEffect(() => {
+    setIsLoading(true);
     setError(null);
+    const unsub = api.subscribeToRegisteredStudents((newStudents) => {
+      setStudents(newStudents);
+      setIsLoading(false);
+    });
+    return () => unsub();
+  }, []);
+
+  const loadStudents = async () => {
+    setIsLoading(true);
     try {
       const res = await api.getRegisteredStudents();
       setStudents(res.students);
     } catch (err: any) {
       setError(err.message || 'Unable to load registered students.');
     } finally {
-      if (!silent) setIsLoading(false);
+      setIsLoading(false);
     }
   };
-
-  useEffect(() => {
-    loadStudents();
-  }, []);
 
   const handleAddStudent = async (e: FormEvent) => {
     e.preventDefault();
@@ -110,7 +115,7 @@ export function StudentManagement() {
       setLastName('');
       setPassword('');
       setConfirmPassword('');
-      loadStudents(true);
+      loadStudents();
     } catch (err: any) {
       setFormFeedback({
         type: 'error',
@@ -238,7 +243,7 @@ export function StudentManagement() {
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => loadStudents(false)}
+            onClick={() => loadStudents()}
             className="p-2 text-stone-600 hover:text-stone-900 bg-white hover:bg-stone-50 border border-stone-300 rounded-lg shadow-2xs transition cursor-pointer"
             title="Refresh directory"
           >
@@ -317,7 +322,7 @@ export function StudentManagement() {
                   required
                   value={firstName}
                   onChange={(e) => setFirstName(e.target.value)}
-                  placeholder="e.g. Shahid"
+                  placeholder="Enter first name"
                   className="w-full px-3 py-2 bg-stone-50 border border-stone-300 rounded-lg text-sm text-stone-900 placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:bg-white transition"
                   disabled={isSubmitting}
                 />
@@ -336,7 +341,7 @@ export function StudentManagement() {
                   required
                   value={lastName}
                   onChange={(e) => setLastName(e.target.value)}
-                  placeholder="e.g. Saleem"
+                  placeholder="Enter last name"
                   className="w-full px-3 py-2 bg-stone-50 border border-stone-300 rounded-lg text-sm text-stone-900 placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:bg-white transition"
                   disabled={isSubmitting}
                 />

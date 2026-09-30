@@ -235,9 +235,10 @@ router.post('/students/logout', requireStudentAuth, (req: Request, res: Response
  */
 router.post('/admin/login', (req: Request, res: Response) => {
   const { code } = req.body;
-  const validCode = process.env.ADMIN_ACCESS_CODE || 'Retype@77#';
+  const validCode = (process.env.ADMIN_ACCESS_CODE || 'Retype@77#').trim();
+  const submittedCode = typeof code === 'string' ? code.trim() : '';
 
-  if (!code || typeof code !== 'string' || code.trim() !== validCode) {
+  if (!submittedCode || submittedCode !== validCode) {
     return res.status(401).json({ error: 'Invalid admin code.' });
   }
 

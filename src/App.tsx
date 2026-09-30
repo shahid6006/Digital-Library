@@ -10,43 +10,54 @@ import { Library, BookOpen, Clock, ShieldCheck, UserCheck } from 'lucide-react';
 
 export default function App() {
   const [currentTab, setCurrentTab] = useState<'student' | 'admin'>('student');
-  const [student, setStudent] = useState<StudentInfo | null>(() => api.getCachedStudent());
+  const [student, setStudent] = useState<StudentInfo | null>(null);
   const [studentStatus, setStudentStatus] = useState<'INSIDE' | 'OUTSIDE' | null>(null);
   const [isAdminLoggedIn, setIsAdminLoggedIn] = useState<boolean>(() => !!api.getAdminToken());
   const [isInitializing, setIsInitializing] = useState<boolean>(true);
 
-  // Initialize session verification
+  // Initialize session verification from Firestore on website load
   useEffect(() => {
+    let isMounted = true;
+
     const initSessions = async () => {
-      // Check student session
-      const studentToken = api.getStudentToken();
-      if (studentToken) {
-        try {
-          const me = await api.getStudentMe();
-          setStudent(me.student);
-          setStudentStatus(me.currentStatus);
-        } catch {
-          api.clearStudentSession();
+      try {
+        const restoredStudent = await api.restoreStudentSession();
+        if (restoredStudent && isMounted) {
+          setStudent(restoredStudent);
+          const me = await api.getStudentMe(restoredStudent.id);
+          if (isMounted) {
+            setStudentStatus(me.currentStatus);
+          }
+        }
+      } catch (err) {
+        console.warn('Student session check:', err);
+        if (isMounted) {
           setStudent(null);
           setStudentStatus(null);
         }
       }
 
-      // Check admin session
-      const adminToken = api.getAdminToken();
-      if (adminToken) {
-        setIsAdminLoggedIn(true);
+      if (isMounted) {
+        setIsAdminLoggedIn(!!api.getAdminToken());
+        setIsInitializing(false);
       }
-
-      setIsInitializing(false);
     };
 
     initSessions();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
-  const handleStudentLoginSuccess = (newStudent: StudentInfo) => {
+  const handleStudentLoginSuccess = async (newStudent: StudentInfo) => {
     setStudent(newStudent);
-    // StudentPortal will load current status
+    try {
+      const me = await api.getStudentMe(newStudent.id);
+      setStudentStatus(me.currentStatus);
+    } catch {
+      // Portal will load
+    }
   };
 
   const handleStudentLogout = async () => {
@@ -82,7 +93,7 @@ export default function App() {
         {isInitializing ? (
           <div className="py-24 flex flex-col items-center justify-center text-stone-400">
             <div className="w-8 h-8 border-3 border-stone-300 border-t-amber-600 rounded-full animate-spin mb-3" />
-            <p className="text-sm">Connecting to Library Terminal...</p>
+            <p className="text-sm font-medium">Connecting to Library Database...</p>
           </div>
         ) : currentTab === 'student' ? (
           /* Student Terminal Flow */
@@ -101,7 +112,7 @@ export default function App() {
             </div>
           )
         ) : (
-          /* Admin Portal Flow */
+          /* Admin Terminal Flow */
           isAdminLoggedIn ? (
             <AdminDashboard onLogout={handleAdminLogout} />
           ) : (
@@ -115,20 +126,31 @@ export default function App() {
         )}
       </main>
 
-      {/* Institutional Footer */}
-      <footer className="bg-white border-t border-stone-200 py-6 mt-auto">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-stone-500">
+      {/* Footer */}
+      <footer className="mt-auto border-t border-stone-200 bg-white py-6 text-center text-xs text-stone-600">
+        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
           <div className="flex items-center gap-2">
-            <Library className="w-4 h-4 text-stone-400" />
-            <span className="font-medium text-stone-700">Central Academic Library Attendance System</span>
-            <span className="text-stone-300">·</span>
-            <span>Digital Gate Entry Register</span>
+            <Library className="w-4 h-4 text-amber-700" />
+            <span className="font-semibold text-stone-700">
+              Digital Library Attendance Terminal
+            </span>
+            <span className="text-stone-300">&bull;</span>
+            <span className="text-stone-600">Pure Firestore Database Driven</span>
           </div>
 
-          <div className="flex items-center gap-4 text-stone-400">
-            <span>Server Timestamp Verification</span>
-            <span className="text-stone-300">·</span>
-            <span>Real-time Live Sync</span>
+          <div className="flex items-center gap-4 text-stone-600">
+            <span className="flex items-center gap-1">
+              <Clock className="w-3.5 h-3.5" />
+              <span>Real-time Log</span>
+            </span>
+            <span className="flex items-center gap-1">
+              <UserCheck className="w-3.5 h-3.5" />
+              <span>Identity Verified</span>
+            </span>
+            <span className="flex items-center gap-1">
+              <ShieldCheck className="w-3.5 h-3.5" />
+              <span>Zero-Trust Rules</span>
+            </span>
           </div>
         </div>
       </footer>
