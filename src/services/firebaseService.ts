@@ -124,26 +124,50 @@ const AUTH_STUDENT_ID_KEY = 'lib_auth_student_id';
 const ADMIN_AUTH_KEY = 'lib_admin_authenticated';
 
 export const firebaseService = {
-  // Ensure anonymous auth ready with persistent session
-  async ensureAuthReady(): Promise<User> {
+  // Ensure auth state ready with persistent session if supported
+  async ensureAuthReady(): Promise<User | null> {
     if (auth.currentUser) {
       return auth.currentUser;
     }
-    return new Promise((resolve, reject) => {
-      const unsub = onAuthStateChanged(auth, async (user) => {
-        unsub();
-        if (user) {
-          resolve(user);
-        } else {
-          try {
-            const cred = await signInAnonymously(auth);
-            resolve(cred.user);
-          } catch (err) {
-            console.warn('Anonymous sign-in warning:', err);
-            reject(err);
+    return new Promise((resolve) => {
+      let resolved = false;
+      const unsub = onAuthStateChanged(
+        auth,
+        (user) => {
+          if (!resolved) {
+            resolved = true;
+            unsub();
+            resolve(user);
+          }
+        },
+        () => {
+          if (!resolved) {
+            resolved = true;
+            unsub();
+            resolve(null);
           }
         }
-      });
+      );
+
+      // Attempt anonymous sign-in gracefully, but never throw if disallowed on the project
+      setTimeout(async () => {
+        if (!resolved) {
+          try {
+            const cred = await signInAnonymously(auth);
+            if (!resolved) {
+              resolved = true;
+              unsub();
+              resolve(cred.user);
+            }
+          } catch {
+            if (!resolved) {
+              resolved = true;
+              unsub();
+              resolve(null);
+            }
+          }
+        }
+      }, 200);
     });
   },
 
@@ -182,18 +206,19 @@ export const firebaseService = {
   async restoreStudentSession(): Promise<StudentInfo | null> {
     try {
       const user = await this.ensureAuthReady();
-      const savedId = this.getSavedStudentId();
-
-      // If we have a saved student ID, verify against Firestore
-      let targetStudentId = savedId;
+      let targetStudentId = this.getSavedStudentId();
 
       if (!targetStudentId && user) {
-        // Query student by authUid
-        const q = query(collection(db, 'students'), where('authUid', '==', user.uid), limit(1));
-        const snap = await getDocs(q);
-        if (!snap.empty) {
-          targetStudentId = snap.docs[0].id;
-          localStorage.setItem(AUTH_STUDENT_ID_KEY, targetStudentId);
+        // Query student by authUid if available
+        try {
+          const q = query(collection(db, 'students'), where('authUid', '==', user.uid), limit(1));
+          const snap = await getDocs(q);
+          if (!snap.empty) {
+            targetStudentId = snap.docs[0].id;
+            localStorage.setItem(AUTH_STUDENT_ID_KEY, targetStudentId);
+          }
+        } catch {
+          // ignore lookup error
         }
       }
 
@@ -220,7 +245,7 @@ export const firebaseService = {
         createdAt: data.createdAt,
       };
     } catch (err) {
-      console.error('Failed to restore student session:', err);
+      console.warn('Student session check notice:', err);
       return null;
     }
   },
@@ -262,14 +287,16 @@ export const firebaseService = {
       throw new Error('Incorrect password. Please verify and try again.');
     }
 
-    // Link student record to persistent Firebase Auth UID
-    try {
-      await updateDoc(docSnap.ref, {
-        authUid: user.uid,
-        lastLoginAt: new Date().toISOString(),
-      });
-    } catch (err) {
-      console.warn('Failed to update student authUid:', err);
+    // Link student record to persistent Firebase Auth UID if user exists
+    if (user) {
+      try {
+        await updateDoc(docSnap.ref, {
+          authUid: user.uid,
+          lastLoginAt: new Date().toISOString(),
+        });
+      } catch (err) {
+        console.warn('Failed to update student authUid:', err);
+      }
     }
 
     // Persist student session ID
