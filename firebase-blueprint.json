@@ -136,6 +136,27 @@
         "createdBy": { "type": "string" }
       },
       "required": ["id", "studentId", "studentName", "startDate", "endDate", "status", "createdAt", "createdBy"]
+    },
+    "PendingGeofenceEntry": {
+      "title": "PendingGeofenceEntry",
+      "description": "Persistent pending-entry verification state for 1-minute geofence dwell",
+      "type": "object",
+      "properties": {
+        "studentId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "status": { "type": "string", "enum": ["WAITING_FOR_DWELL", "VERIFIED", "CANCELLED"] },
+        "dwellStartTimestamp": { "type": "string" },
+        "requiredDwellSeconds": { "type": "number" },
+        "latestLatitude": { "type": "number" },
+        "latestLongitude": { "type": "number" },
+        "latestAccuracy": { "type": "number" },
+        "lastLocationTimestamp": { "type": "string" },
+        "geofenceId": { "type": "string" },
+        "geofenceVersion": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["studentId", "status", "dwellStartTimestamp", "requiredDwellSeconds", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -166,6 +187,10 @@
     "/membershipPeriods/{periodId}": {
       "schema": "MembershipPeriod",
       "description": "Historical and active student membership cycles"
+    },
+    "/pendingGeofenceEntries/{studentId}": {
+      "schema": "PendingGeofenceEntry",
+      "description": "Persistent 1-minute return-IN geofence dwell countdown state per student"
     }
   }
 }

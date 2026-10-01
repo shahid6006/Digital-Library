@@ -35,6 +35,7 @@ import type {
   SessionLocationPoint,
   GeofenceSettings,
   GeofenceStudentState,
+  PendingGeofenceEntry,
 } from '../types';
 import { LocationModal } from './LocationModal';
 import { LiveTrackingMap } from './LiveTrackingMap';
@@ -48,8 +49,8 @@ interface StudentPortalProps {
   onStatusChange?: (status: 'INSIDE' | 'OUTSIDE') => void;
 }
 
-// Configurable constants
-const DEFAULT_GEOFENCE_DWELL_SECONDS = 600; // 10 minutes requirement
+// Configurable constants (Requirement 1: 1-minute dwell requirement)
+const DEFAULT_GEOFENCE_DWELL_SECONDS = 60; // 1 minute (60 seconds) persistent dwell requirement
 const EXIT_CONFIRMATION_MIN_COUNT = 3; // 3 consecutive outside fixes
 const EXIT_CONFIRMATION_MIN_MS = 15000; // 15 seconds outside
 const LOCATION_MIN_INTERVAL = 4000; // minimum 4 seconds between Firestore writes
@@ -158,10 +159,14 @@ export function StudentPortal({ student, onLogout, onStatusChange }: StudentPort
     useState<GeofenceStudentState>('WAITING_FOR_LOCATION');
   const [distanceToGeofence, setDistanceToGeofence] = useState<number | null>(null);
 
-  // 10-Minute Dwell State
+  // 1-Minute Dwell State (Persistent Real-Timestamp Architecture)
   const [dwellRemainingSeconds, setDwellRemainingSeconds] = useState<number>(DEFAULT_GEOFENCE_DWELL_SECONDS);
   const [dwellActive, setDwellActive] = useState<boolean>(false);
   const [useFastTestDwell, setUseFastTestDwell] = useState<boolean>(false);
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(() =>
+    notificationService.getPermission()
+  );
+  const [showBackgroundInfo, setShowBackgroundInfo] = useState<boolean>(false);
 
   // Feedback & Loading
   const [lastActionTime, setLastActionTime] = useState<string | null>(null);
@@ -185,7 +190,7 @@ export function StudentPortal({ student, onLogout, onStatusChange }: StudentPort
   const [pendingOfflineEventsCount, setPendingOfflineEventsCount] = useState<number>(offlineQueue.getPendingCount());
   const [syncStatusText, setSyncStatusText] = useState<string | null>(null);
 
-  // Refs for tracking and timers
+  // Refs for tracking, timers, and true timestamp-based dwell verification
   const watchIdRef = useRef<number | null>(null);
   const lastWriteTimeRef = useRef<number>(0);
   const lastWrittenLocRef = useRef<LocationData | null>(null);
@@ -205,7 +210,9 @@ export function StudentPortal({ student, onLogout, onStatusChange }: StudentPort
   const isSubmittingRef = useRef<boolean>(isSubmitting);
   isSubmittingRef.current = isSubmitting;
 
-  const dwellStartTimeRef = useRef<number | null>(null);
+  // Real timestamp-based persistent pending dwell entry (Requirement 2, 3, 4, 5)
+  const pendingEntryRef = useRef<PendingGeofenceEntry | null>(null);
+  const clockOffsetMsRef = useRef<number>(0);
   const exitConfirmCountRef = useRef<number>(0);
   const exitStartTimeRef = useRef<number | null>(null);
 
@@ -218,6 +225,37 @@ export function StudentPortal({ student, onLogout, onStatusChange }: StudentPort
     });
     return () => unsub();
   }, []);
+
+  // Request notification permission once on mount if supported
+  useEffect(() => {
+    if (notificationService.isSupported() && !notificationService.hasBeenRequested()) {
+      notificationService.requestPermission().then((perm) => {
+        setNotificationPermission(perm);
+      });
+    }
+  }, []);
+
+  // Subscribe to persistent Pending Geofence Entry (Requirement 3, 4, 5)
+  useEffect(() => {
+    if (!student.id) return;
+    const unsub = api.subscribeToPendingGeofenceEntry(student.id, (entry) => {
+      pendingEntryRef.current = entry;
+      if (entry && currentStatusRef.current === 'OUTSIDE') {
+        const startMs = new Date(entry.dwellStartTimestamp).getTime();
+        const currentTrustedMs = Date.now() + clockOffsetMsRef.current;
+        const elapsedSec = Math.max(0, Math.floor((currentTrustedMs - startMs) / 1000));
+        const requiredSec = entry.requiredDwellSeconds || dwellTargetSeconds;
+        const remaining = Math.max(0, requiredSec - elapsedSec);
+        setDwellRemainingSeconds(remaining);
+        setDwellActive(true);
+        setGeofenceStudentState('WAITING_FOR_DWELL');
+      } else if (!entry && currentStatusRef.current === 'OUTSIDE' && geofenceStudentState === 'WAITING_FOR_DWELL') {
+        setDwellActive(false);
+        setGeofenceStudentState('OUTSIDE');
+      }
+    });
+    return () => unsub();
+  }, [student.id, dwellTargetSeconds, geofenceStudentState]);
 
   // Subscribe to student notifications count
   useEffect(() => {
@@ -280,12 +318,75 @@ export function StudentPortal({ student, onLogout, onStatusChange }: StudentPort
         setGeofenceSettings(data.geofenceSettings);
       }
 
+      // Server time clock offset calculation (prevents device clock manipulation)
+      if (data.serverTime) {
+        const srvMs = new Date(data.serverTime).getTime();
+        clockOffsetMsRef.current = srvMs - Date.now();
+      }
+
       // Check if student has already done first manual IN today
       const hasDoneFirstIn =
         typeof data.isFirstManualInDoneToday === 'boolean'
           ? data.isFirstManualInDoneToday
           : data.todayEvents.some((e) => e.action === 'IN');
       setIsFirstManualInDoneToday(hasDoneFirstIn);
+
+      // Restore persistent 1-minute return dwell state (Requirement 2, 3, 4, 5, 17)
+      if (data.pendingDwellEntry && data.currentStatus === 'OUTSIDE') {
+        pendingEntryRef.current = data.pendingDwellEntry;
+        const startMs = new Date(data.pendingDwellEntry.dwellStartTimestamp).getTime();
+        const currentTrustedMs = Date.now() + clockOffsetMsRef.current;
+        const elapsedSec = Math.max(0, Math.floor((currentTrustedMs - startMs) / 1000));
+        const requiredSec = data.pendingDwellEntry.requiredDwellSeconds || DEFAULT_GEOFENCE_DWELL_SECONDS;
+        const remaining = Math.max(0, requiredSec - elapsedSec);
+        setDwellRemainingSeconds(remaining);
+        setDwellActive(true);
+        setGeofenceStudentState('WAITING_FOR_DWELL');
+
+        // If the 1-minute dwell has already fully elapsed while away/closed, immediately verify GPS
+        if (remaining <= 0) {
+          obtainDeviceLocation()
+            .then((freshLoc) => {
+              setCurrentLiveLocation(freshLoc);
+              setLastGpsAccuracy(freshLoc.accuracy);
+              const geo = data.geofenceSettings || geofenceSettingsRef.current;
+              if (geo && geo.enabled) {
+                const dist = computeDistanceMeters(
+                  freshLoc.latitude,
+                  freshLoc.longitude,
+                  geo.latitude,
+                  geo.longitude
+                );
+                setDistanceToGeofence(Math.round(dist));
+                if (dist <= geo.radiusMeters) {
+                  // Student is genuinely still inside geofence! Auto IN eligible!
+                  pendingEntryRef.current = null;
+                  setDwellActive(false);
+                  api.deletePendingGeofenceEntry(student.id).catch(() => {});
+                  handleAutomaticAction(
+                    'IN',
+                    freshLoc,
+                    'Automatic entry confirmed after 1-minute continuous dwell'
+                  );
+                } else {
+                  // Student left the geofence while app was closed
+                  pendingEntryRef.current = null;
+                  setDwellActive(false);
+                  api.deletePendingGeofenceEntry(student.id).catch(() => {});
+                  setGeofenceStudentState('OUTSIDE');
+                }
+              }
+            })
+            .catch((locErr) => {
+              console.warn('Initial dwell verification location notice:', locErr);
+            });
+        }
+      } else if (data.currentStatus === 'INSIDE') {
+        setGeofenceStudentState('INSIDE');
+        setDwellActive(false);
+      } else {
+        setGeofenceStudentState('OUTSIDE');
+      }
 
       if (data.activeSession && data.currentStatus === 'INSIDE') {
         const initialLoc =
@@ -382,109 +483,113 @@ export function StudentPortal({ student, onLogout, onStatusChange }: StudentPort
           isInsideGeofence = dist <= geo.radiusMeters;
         }
 
-        // Automatic Geofence Engine Decision Matrix
+        // Automatic Geofence Engine Decision Matrix (Requirements 1, 2, 6, 7)
         const status = currentStatusRef.current;
-        const hasDoneFirstIn = isFirstManualInDoneTodayRef.current;
 
         if (!geo || !geo.enabled) {
-          // If geofence is disabled by Admin, open access
+          // If geofence is disabled by Admin, open campus access
           setGeofenceStudentState(status === 'INSIDE' ? 'INSIDE' : 'OUTSIDE');
-        } else if (!hasDoneFirstIn) {
-          // -------------------------------------------------------------
-          // PHASE 1: BEFORE FIRST MANUAL IN OF THE DAY
-          // -------------------------------------------------------------
-          // Student must manually press IN. Update state so UI indicates whether inside.
-          setGeofenceStudentState(isInsideGeofence ? 'INSIDE' : 'OUTSIDE');
-
-          // Feature 1: First entry notification when student enters geofence before first IN
+        } else if (status === 'INSIDE') {
+          // Student is currently INSIDE: monitor for geofence exit
           if (isInsideGeofence) {
-            const todayKey = new Date().toISOString().split('T')[0];
-            notificationService.maybeNotifyFirstManualIn(todayKey, () => {
-              setFeedback({
-                type: 'info',
-                message: "You're inside the library attendance area. Press IN to record your first entry today.",
-              });
-              api.sendNotification({
-                recipientType: 'STUDENT',
-                recipientStudentId: student.id,
-                recipientStudentName: student.fullName,
-                title: 'Library Attendance Area',
-                message: "You're inside the library attendance area. Press IN to record your first entry today.",
-                category: 'ATTENDANCE',
-                priority: 'normal',
-                createdBy: 'Library Geofence',
-              }).catch(() => {});
-            });
-          }
-        } else {
-          // -------------------------------------------------------------
-          // PHASE 2: AFTER FIRST MANUAL IN OF THE DAY (AUTOMATIC IN/OUT)
-          // -------------------------------------------------------------
-          if (status === 'INSIDE') {
-            // Student is currently INSIDE
-            if (isInsideGeofence) {
-              // Resets exit confirmation counters
-              exitConfirmCountRef.current = 0;
-              exitStartTimeRef.current = null;
-              setGeofenceStudentState('INSIDE');
-            } else {
-              // Potential EXIT detected — Anti-GPS-flapping exit validation
-              setGeofenceStudentState('VERIFYING_EXIT');
-              exitConfirmCountRef.current++;
-              if (exitStartTimeRef.current === null) {
-                exitStartTimeRef.current = Date.now();
-              }
+            // Resets exit confirmation counters
+            exitConfirmCountRef.current = 0;
+            exitStartTimeRef.current = null;
+            setGeofenceStudentState('INSIDE');
+          } else {
+            // Potential EXIT detected — Anti-GPS-flapping exit validation
+            setGeofenceStudentState('VERIFYING_EXIT');
+            exitConfirmCountRef.current++;
+            if (exitStartTimeRef.current === null) {
+              exitStartTimeRef.current = Date.now();
+            }
 
-              const timeOutside = Date.now() - exitStartTimeRef.current;
+            const timeOutside = Date.now() - exitStartTimeRef.current;
 
-              // Confirm genuine exit if multiple readings outside over confirmation window
-              if (
-                exitConfirmCountRef.current >= EXIT_CONFIRMATION_MIN_COUNT &&
-                (timeOutside >= EXIT_CONFIRMATION_MIN_MS || exitConfirmCountRef.current >= 4)
-              ) {
-                if (!isSubmittingRef.current) {
-                  exitConfirmCountRef.current = 0;
-                  exitStartTimeRef.current = null;
-                  handleAutomaticAction('OUT', freshLoc, 'Left library geofence boundary');
-                }
+            // Confirm genuine exit if multiple readings outside over confirmation window
+            if (
+              exitConfirmCountRef.current >= EXIT_CONFIRMATION_MIN_COUNT &&
+              (timeOutside >= EXIT_CONFIRMATION_MIN_MS || exitConfirmCountRef.current >= 4)
+            ) {
+              if (!isSubmittingRef.current) {
+                exitConfirmCountRef.current = 0;
+                exitStartTimeRef.current = null;
+                handleAutomaticAction('OUT', freshLoc, 'Left library geofence boundary');
               }
             }
+          }
+        } else {
+          // Student is currently OUTSIDE: monitor for geofence entry & 1-minute dwell
+          if (!isInsideGeofence) {
+            // Outside geofence — if student had a pending dwell verification, cancel it with genuine GPS confirmation
+            if (pendingEntryRef.current !== null) {
+              pendingEntryRef.current = null;
+              api.deletePendingGeofenceEntry(student.id).catch(() => {});
+              setDwellActive(false);
+              setDwellRemainingSeconds(dwellTargetSeconds);
+              notificationService.resetDwellNotification();
+              setFeedback({
+                type: 'info',
+                message: 'Entry verification cancelled because you left the attendance area.',
+              });
+            }
+            setGeofenceStudentState('OUTSIDE');
           } else {
-            // Student is currently OUTSIDE
-            if (!isInsideGeofence) {
-              // Outside geofence
-              if (dwellStartTimeRef.current !== null) {
-                // Cancelled dwell if student was waiting and left!
-                dwellStartTimeRef.current = null;
-                setDwellActive(false);
-                setDwellRemainingSeconds(dwellTargetSeconds);
-                setFeedback({
-                  type: 'info',
-                  message: 'Entry verification cancelled because you left the attendance area.',
-                });
-              }
-              setGeofenceStudentState('OUTSIDE');
+            // Student is inside geofence! 1-Minute Dwell Requirement (Requirement 1, 2, 5, 7)
+            setGeofenceStudentState('WAITING_FOR_DWELL');
+
+            const currentTrustedMs = Date.now() + clockOffsetMsRef.current;
+
+            if (pendingEntryRef.current === null) {
+              // Initialize persistent pending dwell entry with real server-aligned timestamp
+              const dwellStartTimestamp = new Date(currentTrustedMs).toISOString();
+              const newEntry: PendingGeofenceEntry = {
+                studentId: student.id,
+                studentName: student.fullName,
+                status: 'WAITING_FOR_DWELL',
+                dwellStartTimestamp,
+                requiredDwellSeconds: dwellTargetSeconds,
+                latestLatitude: freshLoc.latitude,
+                latestLongitude: freshLoc.longitude,
+                latestAccuracy: freshLoc.accuracy,
+                lastLocationTimestamp: new Date().toISOString(),
+                geofenceId: geo.id,
+                geofenceVersion: geo.version,
+                createdAt: dwellStartTimestamp,
+                updatedAt: dwellStartTimestamp,
+              };
+              pendingEntryRef.current = newEntry;
+              api.savePendingGeofenceEntry(newEntry).catch(() => {});
+              setDwellActive(true);
+              setDwellRemainingSeconds(dwellTargetSeconds);
+              notificationService.notifyDwellInProgress(dwellTargetSeconds);
             } else {
-              // Student returned inside geofence! 10-Minute Dwell Requirement
-              setGeofenceStudentState('VERIFYING_ENTRY');
-              if (dwellStartTimeRef.current === null) {
-                dwellStartTimeRef.current = Date.now();
-                setDwellActive(true);
-              }
-
-              const elapsedSec = Math.floor((Date.now() - dwellStartTimeRef.current) / 1000);
-              const remaining = Math.max(0, dwellTargetSeconds - elapsedSec);
+              // Persistent countdown: Calculate remaining time using REAL timestamps!
+              const startMs = new Date(pendingEntryRef.current.dwellStartTimestamp).getTime();
+              const elapsedSec = Math.max(0, Math.floor((currentTrustedMs - startMs) / 1000));
+              const requiredSec = pendingEntryRef.current.requiredDwellSeconds || dwellTargetSeconds;
+              const remaining = Math.max(0, requiredSec - elapsedSec);
               setDwellRemainingSeconds(remaining);
+              setDwellActive(true);
+              notificationService.notifyDwellInProgress(remaining);
 
-              // If full 10-minute continuous dwell is satisfied, trigger automatic IN!
+              // Update location metadata
+              pendingEntryRef.current.latestLatitude = freshLoc.latitude;
+              pendingEntryRef.current.latestLongitude = freshLoc.longitude;
+              pendingEntryRef.current.latestAccuracy = freshLoc.accuracy;
+              pendingEntryRef.current.lastLocationTimestamp = new Date().toISOString();
+              pendingEntryRef.current.updatedAt = new Date().toISOString();
+
+              // If full 1-minute continuous dwell is satisfied, trigger automatic IN!
               if (remaining <= 0) {
                 if (!isSubmittingRef.current) {
-                  dwellStartTimeRef.current = null;
+                  pendingEntryRef.current = null;
                   setDwellActive(false);
+                  api.deletePendingGeofenceEntry(student.id).catch(() => {});
                   handleAutomaticAction(
                     'IN',
                     freshLoc,
-                    `Automatic entry confirmed after ${useFastTestDwell ? '15-second' : '10-minute'} continuous dwell in library`
+                    `Automatic entry confirmed after ${useFastTestDwell ? '15-second' : '1-minute'} continuous dwell in library`
                   );
                 }
               }
@@ -564,25 +669,57 @@ export function StudentPortal({ student, onLogout, onStatusChange }: StudentPort
     };
   }, []);
 
-  // Timer interval to tick countdown seconds smoothly during dwell verification
+  // Timer interval to tick countdown seconds smoothly during dwell verification based on real timestamps
   useEffect(() => {
     let interval: NodeJS.Timeout | null = null;
 
-    if (dwellActive && dwellStartTimeRef.current !== null) {
+    if (dwellActive && pendingEntryRef.current) {
       interval = setInterval(() => {
-        if (dwellStartTimeRef.current === null) return;
-        const elapsedSec = Math.floor((Date.now() - dwellStartTimeRef.current) / 1000);
-        const remaining = Math.max(0, dwellTargetSeconds - elapsedSec);
+        if (!pendingEntryRef.current) return;
+        const startMs = new Date(pendingEntryRef.current.dwellStartTimestamp).getTime();
+        const currentTrustedMs = Date.now() + clockOffsetMsRef.current;
+        const elapsedSec = Math.max(0, Math.floor((currentTrustedMs - startMs) / 1000));
+        const requiredSec = pendingEntryRef.current.requiredDwellSeconds || dwellTargetSeconds;
+        const remaining = Math.max(0, requiredSec - elapsedSec);
         setDwellRemainingSeconds(remaining);
 
-        if (remaining <= 0 && currentLiveLocation && !isSubmittingRef.current) {
-          dwellStartTimeRef.current = null;
-          setDwellActive(false);
-          handleAutomaticAction(
-            'IN',
-            currentLiveLocation,
-            `Automatic entry confirmed after ${useFastTestDwell ? '15-second' : '10-minute'} continuous dwell in library`
-          );
+        if (remaining <= 0 && !isSubmittingRef.current) {
+          const verifyAndTrigger = (loc: LocationData) => {
+            const geo = geofenceSettingsRef.current;
+            let isInside = true;
+            if (geo && geo.enabled) {
+              const dist = computeDistanceMeters(
+                loc.latitude,
+                loc.longitude,
+                geo.latitude,
+                geo.longitude
+              );
+              isInside = dist <= geo.radiusMeters;
+            }
+
+            if (isInside && !isSubmittingRef.current) {
+              pendingEntryRef.current = null;
+              setDwellActive(false);
+              api.deletePendingGeofenceEntry(student.id).catch(() => {});
+              handleAutomaticAction(
+                'IN',
+                loc,
+                `Automatic entry confirmed after ${useFastTestDwell ? '15-second' : '1-minute'} continuous dwell in library`
+              );
+            } else if (!isInside) {
+              pendingEntryRef.current = null;
+              setDwellActive(false);
+              api.deletePendingGeofenceEntry(student.id).catch(() => {});
+              setGeofenceStudentState('OUTSIDE');
+              notificationService.resetDwellNotification();
+            }
+          };
+
+          if (currentLiveLocation) {
+            verifyAndTrigger(currentLiveLocation);
+          } else {
+            obtainDeviceLocation().then(verifyAndTrigger).catch(() => {});
+          }
         }
       }, 1000);
     }
@@ -591,6 +728,119 @@ export function StudentPortal({ student, onLogout, onStatusChange }: StudentPort
       if (interval) clearInterval(interval);
     };
   }, [dwellActive, useFastTestDwell, currentLiveLocation]);
+
+  // Re-sync and evaluate dwell verification on tab visibility resume / screen unlock / focus
+  useEffect(() => {
+    const handleResume = async () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        // 1. Re-evaluate remaining dwell time from real timestamp
+        if (pendingEntryRef.current && currentStatusRef.current === 'OUTSIDE') {
+          const startMs = new Date(pendingEntryRef.current.dwellStartTimestamp).getTime();
+          const currentTrustedMs = Date.now() + clockOffsetMsRef.current;
+          const elapsedSec = Math.max(0, Math.floor((currentTrustedMs - startMs) / 1000));
+          const requiredSec = pendingEntryRef.current.requiredDwellSeconds || dwellTargetSeconds;
+          const remaining = Math.max(0, requiredSec - elapsedSec);
+          setDwellRemainingSeconds(remaining);
+
+          // 2. Fetch fresh high-accuracy location immediately
+          try {
+            const freshLoc = await obtainDeviceLocation();
+            setCurrentLiveLocation(freshLoc);
+            setLastGpsAccuracy(freshLoc.accuracy);
+
+            const geo = geofenceSettingsRef.current;
+            if (geo && geo.enabled) {
+              const dist = computeDistanceMeters(
+                freshLoc.latitude,
+                freshLoc.longitude,
+                geo.latitude,
+                geo.longitude
+              );
+              setDistanceToGeofence(Math.round(dist));
+              const isInside = dist <= geo.radiusMeters;
+
+              if (!isInside) {
+                // Genuine GPS evidence student left the geofence -> cancel pending dwell
+                pendingEntryRef.current = null;
+                api.deletePendingGeofenceEntry(student.id).catch(() => {});
+                setDwellActive(false);
+                setDwellRemainingSeconds(dwellTargetSeconds);
+                notificationService.resetDwellNotification();
+                setFeedback({
+                  type: 'info',
+                  message: 'Entry verification cancelled because you left the attendance area.',
+                });
+              } else if (remaining <= 0 && !isSubmittingRef.current) {
+                // Dwell elapsed AND still genuinely inside -> Mark IN immediately!
+                pendingEntryRef.current = null;
+                setDwellActive(false);
+                api.deletePendingGeofenceEntry(student.id).catch(() => {});
+                handleAutomaticAction(
+                  'IN',
+                  freshLoc,
+                  `Automatic entry confirmed after ${useFastTestDwell ? '15-second' : '1-minute'} continuous dwell in library`
+                );
+              }
+            }
+          } catch (locErr) {
+            console.warn('Resume location check notice:', locErr);
+          }
+        } else if (currentStatusRef.current === 'INSIDE') {
+          // Verify student is still inside geofence
+          try {
+            const freshLoc = await obtainDeviceLocation();
+            setCurrentLiveLocation(freshLoc);
+            setLastGpsAccuracy(freshLoc.accuracy);
+            const geo = geofenceSettingsRef.current;
+            if (geo && geo.enabled) {
+              const dist = computeDistanceMeters(
+                freshLoc.latitude,
+                freshLoc.longitude,
+                geo.latitude,
+                geo.longitude
+              );
+              setDistanceToGeofence(Math.round(dist));
+              if (dist > geo.radiusMeters) {
+                setGeofenceStudentState('VERIFYING_EXIT');
+              }
+            }
+          } catch {}
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleResume);
+    window.addEventListener('focus', handleResume);
+    window.addEventListener('pageshow', handleResume);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleResume);
+      window.removeEventListener('focus', handleResume);
+      window.removeEventListener('pageshow', handleResume);
+    };
+  }, [student.id, dwellTargetSeconds, useFastTestDwell]);
+
+  // Screen WakeLock to keep device screen awake while tracking or verifying dwell (if supported)
+  useEffect(() => {
+    let wakeLockSentinel: any = null;
+    const requestLock = async () => {
+      if (typeof navigator !== 'undefined' && 'wakeLock' in navigator && (currentStatus === 'INSIDE' || dwellActive)) {
+        try {
+          wakeLockSentinel = await (navigator as any).wakeLock.request('screen');
+        } catch {
+          // Wake lock may fail if battery saver is on or permission not granted
+        }
+      }
+    };
+
+    requestLock();
+
+    return () => {
+      if (wakeLockSentinel) {
+        wakeLockSentinel.release().catch(() => {});
+      }
+    };
+  }, [currentStatus, dwellActive]);
 
   // Handle Automatic Action (Automatic IN after dwell or Automatic OUT after exit confirmation)
   const handleAutomaticAction = async (
@@ -605,20 +855,22 @@ export function StudentPortal({ student, onLogout, onStatusChange }: StudentPort
 
     // Feature 9 & 12: Offline detection during automatic geofence action
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
-      offlineQueue.enqueueEvent(
+      const queued = offlineQueue.enqueueEvent(
         student.id,
         student.fullName,
         action,
         location,
         'GEOFENCE_AUTO',
         geo?.version,
-        action === 'IN' ? (useFastTestDwell ? 1 : 10) : undefined
+        action === 'IN' ? (useFastTestDwell ? 0.25 : 1) : undefined
       );
 
       setCurrentStatus(action === 'IN' ? 'INSIDE' : 'OUTSIDE');
       onStatusChange?.(action === 'IN' ? 'INSIDE' : 'OUTSIDE');
       setGeofenceStudentState(action === 'IN' ? 'INSIDE' : 'OUTSIDE');
       setIsSubmitting(false);
+
+      notificationService.notifyAttendanceChange(action, queued.localId, queued.timeFormatted, 'GEOFENCE_AUTO');
 
       setFeedback({
         type: 'info',
@@ -635,7 +887,7 @@ export function StudentPortal({ student, onLogout, onStatusChange }: StudentPort
         student.fullName,
         'GEOFENCE_AUTO',
         geo?.version,
-        action === 'IN' ? (useFastTestDwell ? 1 : 10) : undefined
+        action === 'IN' ? (useFastTestDwell ? 0.25 : 1) : undefined
       );
 
       setCurrentStatus(res.currentStatus);
@@ -643,8 +895,8 @@ export function StudentPortal({ student, onLogout, onStatusChange }: StudentPort
       setLastActionTime(res.event.timeFormatted);
       setTodayEvents(res.todayEvents);
 
-      // Feature 1: Smart notifications on automatic transitions
-      notificationService.notifyAttendanceChange(action, res.event.id, res.event.timeFormatted);
+      // Requirement 14: Automatic attendance notifications
+      notificationService.notifyAttendanceChange(action, res.event.id, res.event.timeFormatted, 'GEOFENCE_AUTO');
       api.sendNotification({
         recipientType: 'STUDENT',
         recipientStudentId: student.id,
@@ -652,8 +904,8 @@ export function StudentPortal({ student, onLogout, onStatusChange }: StudentPort
         title: action === 'IN' ? 'Library Entry Recorded' : 'Library Exit Recorded',
         message:
           action === 'IN'
-            ? 'Library Entry Recorded — You are now marked IN at the library.'
-            : 'Library Exit Recorded — You have been marked OUT of the library.',
+            ? 'Library Entry Recorded — You have been automatically marked IN after staying inside the attendance area.'
+            : 'Library Exit Recorded — You have been automatically marked OUT after leaving the attendance area.',
         category: 'ATTENDANCE',
         priority: 'normal',
         createdBy: 'System (Automatic Geofence)',
@@ -720,7 +972,7 @@ export function StudentPortal({ student, onLogout, onStatusChange }: StudentPort
       return;
     }
 
-    // Geofence Validation for First Manual IN
+    // Geofence Validation for Manual IN (Requirement 10)
     const geo = geofenceSettingsRef.current;
     if (actionToTake === 'IN' && geo && geo.enabled) {
       const dist = computeDistanceMeters(
@@ -736,12 +988,24 @@ export function StudentPortal({ student, onLogout, onStatusChange }: StudentPort
         setSubmittingStep(null);
         setFeedback({
           type: 'error',
-          message: `Cannot mark IN: You are outside the library attendance boundary (~${Math.round(
+          message: `Manual IN is only available inside the library attendance area (~${Math.round(
             dist
-          )}m from center, allowed: ${geo.radiusMeters}m). You must be physically inside the library.`,
+          )}m away, allowed: ${geo.radiusMeters}m).`,
         });
         return;
       }
+    }
+
+    // Cancel pending automatic actions when manual action is initiated (Requirement 8)
+    if (actionToTake === 'IN' && pendingEntryRef.current) {
+      pendingEntryRef.current = null;
+      setDwellActive(false);
+      api.deletePendingGeofenceEntry(student.id).catch(() => {});
+      notificationService.resetDwellNotification();
+    }
+    if (actionToTake === 'OUT') {
+      exitConfirmCountRef.current = 0;
+      exitStartTimeRef.current = null;
     }
 
     setSubmittingStep(
@@ -768,7 +1032,7 @@ export function StudentPortal({ student, onLogout, onStatusChange }: StudentPort
         setGeofenceStudentState('OUTSIDE');
       }
 
-      notificationService.notifyAttendanceChange(actionToTake, queued.localId, queued.timeFormatted);
+      notificationService.notifyAttendanceChange(actionToTake, queued.localId, queued.timeFormatted, 'MANUAL');
 
       setFeedback({
         type: 'info',
@@ -794,8 +1058,8 @@ export function StudentPortal({ student, onLogout, onStatusChange }: StudentPort
       setLastActionTime(res.event.timeFormatted);
       setTodayEvents(res.todayEvents);
 
-      // Feature 1: Attendance notification
-      notificationService.notifyAttendanceChange(actionToTake, res.event.id, res.event.timeFormatted);
+      // Requirement 14: Manual Attendance Notifications
+      notificationService.notifyAttendanceChange(actionToTake, res.event.id, res.event.timeFormatted, 'MANUAL');
       api.sendNotification({
         recipientType: 'STUDENT',
         recipientStudentId: student.id,
@@ -803,8 +1067,8 @@ export function StudentPortal({ student, onLogout, onStatusChange }: StudentPort
         title: actionToTake === 'IN' ? 'Library Entry Recorded' : 'Library Exit Recorded',
         message:
           actionToTake === 'IN'
-            ? 'Library Entry Recorded — You are now marked IN at the library.'
-            : 'Library Exit Recorded — You have been marked OUT of the library.',
+            ? 'Library Entry Recorded — You have been marked IN.'
+            : 'Library Exit Recorded — You have been marked OUT.',
         category: 'ATTENDANCE',
         priority: 'normal',
         createdBy: 'Manual Action',
@@ -838,7 +1102,7 @@ export function StudentPortal({ student, onLogout, onStatusChange }: StudentPort
           : '';
         setFeedback({
           type: 'success',
-          message: `First IN marked successfully at ${res.event.timeFormatted}${accStr}! Automatic geofence monitoring is now active for today.`,
+          message: `Successfully marked IN at ${res.event.timeFormatted}${accStr}! Live GPS tracking active.`,
         });
       } else {
         // Manual OUT
@@ -849,7 +1113,7 @@ export function StudentPortal({ student, onLogout, onStatusChange }: StudentPort
           : '';
         setFeedback({
           type: 'success',
-          message: `Successfully marked OUT at ${res.event.timeFormatted}${accStr}. When you return to the library, automatic 10-minute entry verification will begin.`,
+          message: `Successfully marked OUT at ${res.event.timeFormatted}${accStr}. When you return, automatic 1-minute verification or IN NOW will be available.`,
         });
       }
     } catch (err: any) {
@@ -1024,6 +1288,16 @@ export function StudentPortal({ student, onLogout, onStatusChange }: StudentPort
           </div>
         </div>
 
+        {/* Notification Permission Warning (Requirement 16) */}
+        {notificationPermission === 'denied' && (
+          <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <Bell className="w-4 h-4 text-amber-700 shrink-0" />
+              <span>Notifications are disabled. Enable notifications in your browser settings to receive attendance alerts.</span>
+            </div>
+          </div>
+        )}
+
         {/* AUTOMATION & GEOFENCE STATUS SECTION */}
         <div className="mt-4 p-4 rounded-xl border border-stone-200 bg-stone-50/50 space-y-3">
           <div className="flex items-center justify-between">
@@ -1037,14 +1311,14 @@ export function StudentPortal({ student, onLogout, onStatusChange }: StudentPort
             {/* Fast test toggle */}
             <div className="flex items-center gap-1.5 text-[11px] text-stone-500 font-medium">
               <Sliders className="w-3 h-3 text-stone-400" />
-              <span>Dwell: {useFastTestDwell ? '15s Demo' : '10 min'}</span>
+              <span>Dwell: {useFastTestDwell ? '15s Demo' : '1 min'}</span>
               <button
                 type="button"
                 onClick={() => setUseFastTestDwell((p) => !p)}
                 className="text-amber-700 underline ml-1 hover:text-amber-800 text-[10px] cursor-pointer"
                 title="Toggle fast 15s demo dwell for testing"
               >
-                {useFastTestDwell ? 'Reset 10m' : 'Fast 15s'}
+                {useFastTestDwell ? 'Reset 1m' : 'Fast 15s'}
               </button>
             </div>
           </div>
@@ -1083,45 +1357,45 @@ export function StudentPortal({ student, onLogout, onStatusChange }: StudentPort
             </div>
           )}
 
-          {/* State Specific Prompt */}
-          {!isFirstManualInDoneToday ? (
-            /* First Manual IN Instruction */
-            <div className="p-3 bg-amber-50/80 border border-amber-200 rounded-lg text-xs text-amber-900 flex items-start gap-2">
-              <Info className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+          {/* Dynamic Status Prompt (Requirements 7, 15, 20) */}
+          {currentStatus === 'INSIDE' ? (
+            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-950 flex items-start gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
               <div className="leading-relaxed">
-                <strong>First Entry of the Day:</strong> You must physically enter the library and
-                manually press <strong>&quot;MARK IN&quot;</strong> once. After this first entry, all
-                subsequent IN/OUT events today will happen automatically based on your location.
+                <strong>INSIDE LIBRARY ✓:</strong> Your attendance session is active and live GPS tracking is recording your route. The system will automatically mark you OUT upon confirmed exit, or you can press <strong>OUT NOW</strong> below at any time.
+              </div>
+            </div>
+          ) : isInsideRadius ? (
+            <div className="p-3 bg-gradient-to-r from-emerald-50 to-amber-50 border border-emerald-300 rounded-lg text-xs text-stone-800 flex items-start gap-2">
+              <Radio className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5 animate-pulse" />
+              <div className="leading-relaxed">
+                <strong>Inside Attendance Area ✓:</strong> You are inside the library attendance boundary. Stay for 1 minute for automatic IN, or press <strong>IN NOW</strong> below for immediate entry without waiting.
               </div>
             </div>
           ) : (
-            /* Automatic Mode Active Banner */
-            <div className="p-3 bg-purple-50 border border-purple-200 rounded-lg text-xs text-purple-900 flex items-start gap-2">
-              <Zap className="w-4 h-4 text-purple-600 shrink-0 mt-0.5" />
+            <div className="p-3 bg-stone-100 border border-stone-200 rounded-lg text-xs text-stone-700 flex items-start gap-2">
+              <MapPin className="w-4 h-4 text-stone-500 shrink-0 mt-0.5" />
               <div className="leading-relaxed">
-                <strong>Automatic Attendance Monitoring Active:</strong> Your first IN of the day is
-                complete! The system will automatically mark you OUT when you leave, and automatically
-                mark you IN when you return and stay for 10 continuous minutes.
+                <strong>Outside Attendance Area:</strong> You are currently outside the library boundary (~{distanceToGeofence !== null ? `${distanceToGeofence}m` : '...'} away, allowed: {geofenceSettings?.radiusMeters}m). Move inside the library to record attendance or start automatic entry verification.
               </div>
             </div>
           )}
 
-          {/* 10-Minute Dwell Countdown Card (Only when student is verifying entry on return) */}
-          {geofenceStudentState === 'VERIFYING_ENTRY' && currentStatus === 'OUTSIDE' && (
+          {/* 1-Minute Dwell Countdown Card (Whenever student is inside attendance area and OUTSIDE status) */}
+          {(isInsideRadius || dwellActive || geofenceStudentState === 'WAITING_FOR_DWELL' || geofenceStudentState === 'VERIFYING_ENTRY') && currentStatus === 'OUTSIDE' && (
             <div className="p-4 bg-gradient-to-r from-amber-50 to-orange-50 border-2 border-amber-300 rounded-xl text-amber-950 space-y-2 animate-pulse">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2 font-bold text-xs">
                   <Timer className="w-4 h-4 text-amber-700 animate-spin" />
-                  <span>Stay Verification in Progress</span>
+                  <span>Entry Verification in Progress (1-Minute Dwell)</span>
                 </div>
-                <span className="font-mono text-base font-extrabold text-amber-900 bg-white px-2 py-0.5 rounded-md border border-amber-200 shadow-2xs">
-                  {formatDuration(dwellRemainingSeconds)} remaining
+                <span className="font-mono text-base font-extrabold text-amber-900 bg-white px-2.5 py-1 rounded-md border border-amber-200 shadow-2xs">
+                  Automatic IN in {formatDuration(dwellRemainingSeconds)} ({dwellRemainingSeconds}s remaining)
                 </span>
               </div>
               <p className="text-xs text-amber-800 leading-relaxed">
-                Inside attendance area. Stay here for{' '}
-                <strong>{useFastTestDwell ? '15 seconds' : '10 continuous minutes'}</strong> to be
-                automatically marked IN. If you leave early, verification will cancel.
+                Inside attendance area. Automatic IN will trigger in{' '}
+                <strong>{useFastTestDwell ? '15 seconds' : `${dwellRemainingSeconds} seconds`}</strong>, or you can press <strong>IN NOW</strong> below for immediate entry without waiting.
               </p>
             </div>
           )}
@@ -1167,44 +1441,58 @@ export function StudentPortal({ student, onLogout, onStatusChange }: StudentPort
           </div>
         )}
 
-        {/* Action Buttons Section */}
+        {/* DYNAMIC ACTION BUTTONS SECTION (Requirements 1, 2, 4, 7, 15) */}
         <div className="mt-6 pt-1">
-          {!isFirstManualInDoneToday ? (
-            /* First Manual IN of the Day Button */
-            <button
-              type="button"
-              onClick={() => handleAttendanceAction('IN')}
-              disabled={isSubmitting || isLoading || (geofenceSettings?.enabled && !isInsideRadius)}
-              className={`w-full flex items-center justify-center gap-2.5 py-4 px-6 font-extrabold rounded-xl shadow-md transition-all duration-150 text-base cursor-pointer ${
-                geofenceSettings?.enabled && !isInsideRadius
-                  ? 'bg-stone-300 text-stone-500 cursor-not-allowed'
-                  : 'bg-emerald-700 hover:bg-emerald-600 active:scale-99 text-white hover:shadow-lg'
-              }`}
-            >
-              {isSubmitting ? (
-                <div className="flex items-center gap-2">
-                  <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  <span>{submittingStep || 'Processing First IN...'}</span>
-                </div>
-              ) : (
-                <>
-                  <LogIn className="w-5 h-5" />
+          {currentStatus === 'OUTSIDE' ? (
+            /* Student is OUTSIDE: Offer immediate [IN NOW] button */
+            <div className="space-y-3">
+              <button
+                type="button"
+                onClick={() => handleAttendanceAction('IN')}
+                disabled={isSubmitting || isLoading || (geofenceSettings?.enabled && !isInsideRadius)}
+                className={`w-full flex items-center justify-center gap-2.5 py-4 px-6 font-extrabold rounded-xl shadow-md transition-all duration-150 text-base cursor-pointer ${
+                  geofenceSettings?.enabled && !isInsideRadius
+                    ? 'bg-stone-300 text-stone-500 cursor-not-allowed'
+                    : 'bg-emerald-700 hover:bg-emerald-600 active:scale-99 text-white hover:shadow-lg'
+                }`}
+              >
+                {isSubmitting ? (
+                  <div className="flex items-center gap-2">
+                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    <span>{submittingStep || 'Recording IN...'}</span>
+                  </div>
+                ) : (
+                  <>
+                    <LogIn className="w-5 h-5" />
+                    <span>
+                      {geofenceSettings?.enabled && !isInsideRadius
+                        ? 'MOVE INSIDE LIBRARY TO MARK IN'
+                        : 'IN NOW'}
+                    </span>
+                  </>
+                )}
+              </button>
+
+              <div className="text-[11px] text-center text-stone-500">
+                {isInsideRadius ? (
                   <span>
-                    {geofenceSettings?.enabled && !isInsideRadius
-                      ? 'MOVE INSIDE LIBRARY TO MARK FIRST IN'
-                      : 'MARK FIRST IN & START TODAY’S ATTENDANCE'}
+                    Press <strong>IN NOW</strong> for immediate entry, or stay inside for 1 minute for automatic entry.
                   </span>
-                </>
-              )}
-            </button>
-          ) : currentStatus === 'INSIDE' ? (
-            /* Option to mark OUT manually if student wants early immediate departure */
+                ) : (
+                  <span>
+                    Manual IN is only available inside the library attendance area.
+                  </span>
+                )}
+              </div>
+            </div>
+          ) : (
+            /* Student is INSIDE: Offer immediate [OUT NOW] button */
             <div className="space-y-2">
               <button
                 type="button"
                 onClick={() => handleAttendanceAction('OUT')}
                 disabled={isSubmitting || isLoading}
-                className="w-full flex items-center justify-center gap-2 py-3.5 px-6 bg-rose-700 hover:bg-rose-600 active:scale-99 text-white font-extrabold rounded-xl shadow-md transition-all text-sm cursor-pointer disabled:opacity-50"
+                className="w-full flex items-center justify-center gap-2.5 py-3.5 px-6 bg-rose-700 hover:bg-rose-600 active:scale-99 text-white font-extrabold rounded-xl shadow-md transition-all text-sm cursor-pointer disabled:opacity-50"
               >
                 {isSubmitting ? (
                   <div className="flex items-center gap-2">
@@ -1214,24 +1502,12 @@ export function StudentPortal({ student, onLogout, onStatusChange }: StudentPort
                 ) : (
                   <>
                     <LogOut className="w-4 h-4" />
-                    <span>MARK OUT (EARLY DEPARTURE)</span>
+                    <span>OUT NOW</span>
                   </>
                 )}
               </button>
               <p className="text-[11px] text-center text-stone-500">
-                You can also simply leave the library — the system will automatically mark you OUT
-                upon exiting.
-              </p>
-            </div>
-          ) : (
-            /* When OUTSIDE after first IN: automatic mode active */
-            <div className="p-4 rounded-xl bg-purple-50/70 border border-purple-200 text-center space-y-1">
-              <div className="flex items-center justify-center gap-1.5 text-xs font-bold text-purple-900">
-                <Check className="w-4 h-4 text-purple-700" />
-                <span>Automatic Mode Active — No Manual Press Needed</span>
-              </div>
-              <p className="text-xs text-purple-700">
-                When you re-enter the library, stay for 10 minutes to be automatically marked IN.
+                Press <strong>OUT NOW</strong> to mark departure immediately, or simply leave the library — the system will automatically mark you OUT upon exiting.
               </p>
             </div>
           )}
@@ -1241,13 +1517,42 @@ export function StudentPortal({ student, onLogout, onStatusChange }: StudentPort
         <div className="mt-6 pt-4 border-t border-stone-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px] text-stone-500">
           <div className="flex items-center gap-1.5">
             <ShieldCheck className="w-4 h-4 text-emerald-600" />
-            <span>Anti-GPS-flapping verification &amp; 10-minute continuous dwell rule</span>
+            <span>Anti-GPS-flapping verification &amp; 1-minute continuous dwell rule</span>
           </div>
-          <div className="flex items-center gap-1 font-mono text-stone-400">
+          <button
+            type="button"
+            onClick={() => setShowBackgroundInfo((prev) => !prev)}
+            className="flex items-center gap-1 font-mono text-stone-500 hover:text-amber-800 transition cursor-pointer underline decoration-dotted"
+          >
             <Radio className="w-3.5 h-3.5 text-stone-400" />
-            <span>Device Geolocation API (No fake coordinates)</span>
-          </div>
+            <span>Background Tracking Architecture: {showBackgroundInfo ? 'Hide Details' : 'Platform Specs'}</span>
+          </button>
         </div>
+
+        {/* Transparent Background Architecture Disclosure (Requirement 8 & 9) */}
+        {showBackgroundInfo && (
+          <div className="mt-3 p-3.5 bg-stone-100/90 border border-stone-200 rounded-xl text-[11px] text-stone-600 space-y-2 animate-fade-in">
+            <div className="font-bold text-stone-800 flex items-center gap-1.5">
+              <Info className="w-3.5 h-3.5 text-amber-700" />
+              <span>Background Location &amp; Platform Architecture</span>
+            </div>
+            <p>
+              <strong>A. Active Tab / Foreground PWA:</strong> Full real-time continuous GPS tracking and route mapping via HTML5 Geolocation API (<code>watchPosition</code>).
+            </p>
+            <p>
+              <strong>B. Background / Suspended PWA:</strong> Browsers throttle JavaScript in background; Service Worker delivers OS notifications (<code>registration.showNotification</code>). Real server timestamps anchor the 1-minute countdown.
+            </p>
+            <p>
+              <strong>C. Browser / PWA Completely Terminated:</strong> Operating systems terminate web runtime execution when closed. Dwell countdown state is preserved in Firestore and localStorage. Reopening calculates elapsed time from real timestamps without resetting.
+            </p>
+            <p>
+              <strong>D. Phone Locked / Screen Off:</strong> Screen WakeLock API keeps the screen active while on premises. Native Web Notifications sound in the device notification shade.
+            </p>
+            <p>
+              <strong>E. Android OS Restrictions:</strong> Battery optimization / Doze modes are respected. No synthetic coordinates or spoofed movement are used; attendance actions always require genuine hardware GPS evidence.
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Live Map Section (Only active when INSIDE) */}

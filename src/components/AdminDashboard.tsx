@@ -24,6 +24,7 @@ import { StudentManagement } from './StudentManagement';
 import { LocationModal } from './LocationModal';
 import { LocationHistoryView } from './LocationHistoryView';
 import { AdminLiveMapView } from './AdminLiveMapView';
+import { AdminLiveDashboard } from './AdminLiveDashboard';
 import { AdminGeofenceSettings } from './AdminGeofenceSettings';
 import { AdminNotificationCenter } from './AdminNotificationCenter';
 
@@ -65,8 +66,8 @@ function formatDateDisplay(dateKey: string): string {
 }
 
 export function AdminDashboard({ onLogout }: AdminDashboardProps) {
-  // Navigation between Daily Attendance view, Live GPS Map view, Location History view, Geofence Settings, Student Management view, and Notifications
-  const [adminView, setAdminView] = useState<'attendance' | 'live_map' | 'location_history' | 'geofence' | 'management' | 'notifications'>('attendance');
+  // Navigation between Daily Attendance view, Live Dashboard, Live GPS Map view, Location History view, Geofence Settings, Student Management view, and Notifications
+  const [adminView, setAdminView] = useState<'attendance' | 'live_dashboard' | 'live_map' | 'location_history' | 'geofence' | 'management' | 'notifications'>('attendance');
 
   const [selectedDate, setSelectedDate] = useState<string>(getTodayDateKey());
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -223,6 +224,18 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
           </button>
           <button
             type="button"
+            onClick={() => setAdminView('live_dashboard')}
+            className={`flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-md transition cursor-pointer ${
+              adminView === 'live_dashboard'
+                ? 'bg-white text-stone-900 shadow-2xs'
+                : 'text-stone-600 hover:text-stone-900'
+            }`}
+          >
+            <Radio className="w-3.5 h-3.5 text-emerald-600 animate-pulse" />
+            <span>Live Dashboard</span>
+          </button>
+          <button
+            type="button"
             onClick={() => setAdminView('live_map')}
             className={`flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-md transition cursor-pointer ${
               adminView === 'live_map'
@@ -230,7 +243,7 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
                 : 'text-stone-600 hover:text-stone-900'
             }`}
           >
-            <Radio className="w-3.5 h-3.5 text-emerald-600 animate-pulse" />
+            <Map className="w-3.5 h-3.5 text-amber-600" />
             <span>Live GPS Map</span>
           </button>
           <button
@@ -318,6 +331,8 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
         <StudentManagement />
       ) : adminView === 'geofence' ? (
         <AdminGeofenceSettings />
+      ) : adminView === 'live_dashboard' ? (
+        <AdminLiveDashboard onSelectStudentLocation={setSelectedStudentForLocation} />
       ) : adminView === 'live_map' ? (
         <AdminLiveMapView />
       ) : adminView === 'location_history' ? (
@@ -757,17 +772,17 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
                                         <span>{evt.timeFormatted}</span>
                                         {evt.triggerType === 'GEOFENCE_AUTO' ? (
                                           <span
-                                            className="text-[9px] bg-purple-100 text-purple-800 border border-purple-200 px-1 py-0.5 rounded font-sans font-extrabold"
+                                            className="text-[9px] bg-purple-100 text-purple-800 border border-purple-200 px-1.5 py-0.5 rounded font-mono font-bold"
                                             title="Triggered automatically by geofence"
                                           >
-                                            ⚡ Auto
+                                            ⚡ GEOFENCE_AUTO
                                           </span>
                                         ) : (
                                           <span
-                                            className="text-[9px] bg-stone-100 text-stone-600 border border-stone-200 px-1 py-0.5 rounded font-sans font-semibold"
-                                            title="Manually initiated check-in"
+                                            className="text-[9px] bg-stone-100 text-stone-700 border border-stone-200 px-1.5 py-0.5 rounded font-mono font-bold"
+                                            title="Manually initiated attendance"
                                           >
-                                            Manual
+                                            MANUAL
                                           </span>
                                         )}
                                         {evt.location && (

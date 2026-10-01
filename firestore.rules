@@ -68,6 +68,12 @@ service cloud.firestore {
       allow read: if true;
       allow write: if (isSignedIn() || request.auth == null);
     }
+
+    // Pending geofence dwell entries (Persistent 1-minute return-IN countdown)
+    match /pendingGeofenceEntries/{studentId} {
+      allow read: if true;
+      allow write: if (isSignedIn() || request.auth == null);
+    }
   }
 }
 

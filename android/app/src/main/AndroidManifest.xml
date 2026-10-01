@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.digitallibrary.attendance">
+
+    <!-- Location Permissions -->
+    <uses-permission android:name="android.intent.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.intent.permission.ACCESS_COARSE_LOCATION" />
+    <!-- Android 10+ Background Location -->
+    <uses-permission android:name="android.intent.permission.ACCESS_BACKGROUND_LOCATION" />
+
+    <!-- Foreground Service Permissions (Android 9+ & Android 14+) -->
+    <uses-permission android:name="android.intent.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.intent.permission.FOREGROUND_SERVICE_LOCATION" />
+
+    <!-- Notifications & Boot Permissions -->
+    <uses-permission android:name="android.intent.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.intent.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.intent.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.intent.permission.INTERNET" />
+    <uses-permission android:name="android.intent.permission.ACCESS_NETWORK_STATE" />
+
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="Digital Library"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+
+        <!-- Geofence Broadcast Receiver (Triggered by Google Play Services even when app is killed) -->
+        <receiver
+            android:name=".GeofenceBroadcastReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.digitallibrary.attendance.ACTION_GEOFENCE_EVENT" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Persistent Location Foreground Service -->
+        <service
+            android:name=".LocationUpdatesForegroundService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="location" />
+
+    </application>
+</manifest>

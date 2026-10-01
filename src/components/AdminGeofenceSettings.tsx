@@ -472,7 +472,7 @@ export function AdminGeofenceSettings() {
             </h2>
             <p className="text-sm text-stone-500 mt-1 max-w-2xl">
               Set the library's physical location and allowable attendance radius. Students within this
-              boundary can mark their first IN of the day, after which automatic 10-minute dwell and exit
+              boundary can mark their first IN of the day, after which automatic 1-minute dwell and exit
               monitoring takes over.
             </p>
           </div>

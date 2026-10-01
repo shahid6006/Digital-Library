@@ -73,12 +73,30 @@ export interface GeofenceSettings {
   updatedBy?: string;
 }
 
+export interface PendingGeofenceEntry {
+  studentId: string;
+  studentName?: string;
+  status: 'WAITING_FOR_DWELL' | 'VERIFIED' | 'CANCELLED';
+  dwellStartTimestamp: string;
+  requiredDwellSeconds: number; // 60 seconds (1 minute)
+  latestLatitude?: number | null;
+  latestLongitude?: number | null;
+  latestAccuracy?: number | null;
+  lastLocationTimestamp?: string;
+  geofenceId?: string;
+  geofenceVersion?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type GeofenceStudentState =
   | 'INSIDE'
   | 'OUTSIDE'
   | 'WAITING_FOR_LOCATION'
+  | 'WAITING_FOR_DWELL'
   | 'VERIFYING_ENTRY'
-  | 'VERIFYING_EXIT';
+  | 'VERIFYING_EXIT'
+  | 'SYNC_PENDING';
 
 export interface StudentMeResponse {
   student: StudentInfo;
@@ -97,6 +115,7 @@ export interface StudentMeResponse {
   serverTime: string;
   geofenceSettings?: GeofenceSettings | null;
   isFirstManualInDoneToday?: boolean;
+  pendingDwellEntry?: PendingGeofenceEntry | null;
 }
 
 export interface AdminSummary {

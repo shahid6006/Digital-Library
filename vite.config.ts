@@ -51,8 +51,7 @@ export default defineConfig(() => {
           navigateFallbackDenylist: [/^\/api/, /firestore\.googleapis\.com/, /identitytoolkit\.googleapis\.com/],
         },
         devOptions: {
-          enabled: true,
-          type: 'module',
+          enabled: false,
         },
       }),
     ],

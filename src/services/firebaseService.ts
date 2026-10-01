@@ -37,6 +37,7 @@ import type {
   NotificationPriority,
   MembershipPeriod,
   OfflineAttendanceEvent,
+  PendingGeofenceEntry,
 } from '../types';
 
 export enum OperationType {
@@ -426,7 +427,7 @@ export const firebaseService = {
       action: requestedAction,
       triggerType,
       geofenceVersion: geofenceVersion || null,
-      dwellMinutes: dwellMinutes ?? (triggerType === 'GEOFENCE_AUTO' && requestedAction === 'IN' ? 10 : null),
+      dwellMinutes: dwellMinutes ?? (triggerType === 'GEOFENCE_AUTO' && requestedAction === 'IN' ? 1 : null),
       timestamp,
       dateKey,
       location:
@@ -564,7 +565,7 @@ export const firebaseService = {
       action: 'IN',
       triggerType,
       geofenceVersion: geofenceVersion || null,
-      dwellMinutes: dwellMinutes ?? (triggerType === 'GEOFENCE_AUTO' ? 10 : null),
+      dwellMinutes: dwellMinutes ?? (triggerType === 'GEOFENCE_AUTO' ? 1 : null),
       timestamp: inTimestamp,
       dateKey,
       location: sessionPayload.inLocation,
@@ -588,6 +589,9 @@ export const firebaseService = {
       timeFormatted: formatLocalTime(inTimestamp),
       location: sessionPayload.inLocation,
     };
+
+    // Clean up any pending return dwell entry once officially marked IN
+    this.deletePendingGeofenceEntry(studentId).catch(() => {});
 
     return {
       session: sessionPayload,
@@ -867,6 +871,7 @@ export const firebaseService = {
     status: 'INSIDE' | 'OUTSIDE';
     lastEvent: ActivityEvent | null;
     activeSession: AttendanceSession | null;
+    pendingDwellEntry: PendingGeofenceEntry | null;
   }> {
     await this.ensureAuthReady();
 
@@ -883,8 +888,11 @@ export const firebaseService = {
         status: 'INSIDE',
         lastEvent,
         activeSession,
+        pendingDwellEntry: null,
       };
     }
+
+    const pendingDwellEntry = await this.getPendingGeofenceEntry(studentId);
 
     try {
       const q = query(
@@ -896,7 +904,7 @@ export const firebaseService = {
       const snap = await getDocs(q);
 
       if (snap.empty) {
-        return { status: 'OUTSIDE', lastEvent: null, activeSession: null };
+        return { status: 'OUTSIDE', lastEvent: null, activeSession: null, pendingDwellEntry };
       }
 
       const docSnap = snap.docs[0];
@@ -913,10 +921,102 @@ export const firebaseService = {
         status: data.action === 'IN' ? 'INSIDE' : 'OUTSIDE',
         lastEvent,
         activeSession: null,
+        pendingDwellEntry: data.action === 'OUT' ? pendingDwellEntry : null,
       };
     } catch (err) {
       handleFirestoreError(err, OperationType.GET, 'attendanceEvents');
     }
+  },
+
+  // --------------------------------------------------------------------------
+  // PERSISTENT PENDING GEOFENCE ENTRY (1-Minute Return-IN Dwell Architecture)
+  // --------------------------------------------------------------------------
+
+  async getPendingGeofenceEntry(studentId: string): Promise<PendingGeofenceEntry | null> {
+    await this.ensureAuthReady();
+    try {
+      const snap = await getDoc(doc(db, 'pendingGeofenceEntries', studentId));
+      if (!snap.exists()) {
+        try {
+          const cached = localStorage.getItem(`pending_dwell_entry_${studentId}`);
+          if (cached) return JSON.parse(cached);
+        } catch {}
+        return null;
+      }
+      const data = snap.data() as PendingGeofenceEntry;
+      try {
+        localStorage.setItem(`pending_dwell_entry_${studentId}`, JSON.stringify(data));
+      } catch {}
+      return data;
+    } catch (err) {
+      try {
+        const cached = localStorage.getItem(`pending_dwell_entry_${studentId}`);
+        if (cached) return JSON.parse(cached);
+      } catch {}
+      return null;
+    }
+  },
+
+  async savePendingGeofenceEntry(entry: PendingGeofenceEntry): Promise<void> {
+    await this.ensureAuthReady();
+    try {
+      localStorage.setItem(`pending_dwell_entry_${entry.studentId}`, JSON.stringify(entry));
+    } catch {}
+
+    try {
+      await setDoc(doc(db, 'pendingGeofenceEntries', entry.studentId), entry);
+    } catch (err) {
+      console.warn('savePendingGeofenceEntry error (saved locally):', err);
+    }
+  },
+
+  async deletePendingGeofenceEntry(studentId: string): Promise<void> {
+    await this.ensureAuthReady();
+    try {
+      localStorage.removeItem(`pending_dwell_entry_${studentId}`);
+    } catch {}
+
+    try {
+      await deleteDoc(doc(db, 'pendingGeofenceEntries', studentId));
+    } catch (err) {
+      console.warn('deletePendingGeofenceEntry error:', err);
+    }
+  },
+
+  subscribeToPendingGeofenceEntry(
+    studentId: string,
+    callback: (entry: PendingGeofenceEntry | null) => void
+  ): () => void {
+    const docRef = doc(db, 'pendingGeofenceEntries', studentId);
+    return onSnapshot(
+      docRef,
+      (snap) => {
+        if (!snap.exists()) {
+          callback(null);
+        } else {
+          callback(snap.data() as PendingGeofenceEntry);
+        }
+      },
+      (error) => {
+        console.warn('pendingGeofenceEntries subscription notice:', error);
+      }
+    );
+  },
+
+  subscribeToAllPendingGeofenceEntries(
+    callback: (entries: PendingGeofenceEntry[]) => void
+  ): () => void {
+    const q = collection(db, 'pendingGeofenceEntries');
+    return onSnapshot(
+      q,
+      (snap) => {
+        const list = snap.docs.map((d) => d.data() as PendingGeofenceEntry);
+        callback(list);
+      },
+      (error) => {
+        console.warn('all pendingGeofenceEntries subscription notice:', error);
+      }
+    );
   },
 
   /**

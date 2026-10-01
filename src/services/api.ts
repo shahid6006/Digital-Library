@@ -14,6 +14,7 @@ import type {
   NotificationCategory,
   NotificationPriority,
   OfflineAttendanceEvent,
+  PendingGeofenceEntry,
 } from '../types';
 
 export const api = {
@@ -49,7 +50,7 @@ export const api = {
       throw new Error('Not logged in. Session expired.');
     }
 
-    const { status, lastEvent, activeSession } = await firebaseService.getStudentCurrentStatus(activeStudentId);
+    const { status, lastEvent, activeSession, pendingDwellEntry } = await firebaseService.getStudentCurrentStatus(activeStudentId);
     const nowIso = new Date().toISOString();
     const dateKey = computeDateKey(nowIso);
     const todayEvents = await firebaseService.getStudentTodayEvents(activeStudentId, dateKey);
@@ -94,6 +95,7 @@ export const api = {
       serverTime: nowIso,
       geofenceSettings,
       isFirstManualInDoneToday: todayEvents.some((e) => e.action === 'IN'),
+      pendingDwellEntry,
     };
   },
 
@@ -384,5 +386,31 @@ export const api = {
 
   async getStudentProfileDetails(studentId: string) {
     return firebaseService.getStudentProfileDetails(studentId);
+  },
+
+  // Persistent Geofence Pending Dwell Entry (Requirement 1, 2, 3, 4, 5)
+  async getPendingGeofenceEntry(studentId: string): Promise<PendingGeofenceEntry | null> {
+    return firebaseService.getPendingGeofenceEntry(studentId);
+  },
+
+  async savePendingGeofenceEntry(entry: PendingGeofenceEntry): Promise<void> {
+    return firebaseService.savePendingGeofenceEntry(entry);
+  },
+
+  async deletePendingGeofenceEntry(studentId: string): Promise<void> {
+    return firebaseService.deletePendingGeofenceEntry(studentId);
+  },
+
+  subscribeToPendingGeofenceEntry(
+    studentId: string,
+    callback: (entry: PendingGeofenceEntry | null) => void
+  ): () => void {
+    return firebaseService.subscribeToPendingGeofenceEntry(studentId, callback);
+  },
+
+  subscribeToAllPendingGeofenceEntries(
+    callback: (entries: PendingGeofenceEntry[]) => void
+  ): () => void {
+    return firebaseService.subscribeToAllPendingGeofenceEntries(callback);
   },
 };
