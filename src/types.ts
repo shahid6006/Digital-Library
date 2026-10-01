@@ -15,10 +15,15 @@ export interface StudentInfo {
 
 export interface ActivityEvent {
   id: string;
+  studentId?: string;
+  studentName?: string;
   action: 'IN' | 'OUT';
   timestamp: string;
   timeFormatted: string;
   location?: LocationData | null;
+  triggerType?: 'MANUAL' | 'GEOFENCE_AUTO';
+  geofenceVersion?: string;
+  dwellMinutes?: number;
 }
 
 export interface SessionLocationPoint {
@@ -48,10 +53,31 @@ export interface AttendanceSession {
     timestamp: string;
   } | null;
   status: 'INSIDE' | 'OUTSIDE';
+  triggerType?: 'MANUAL' | 'GEOFENCE_AUTO';
+  geofenceVersion?: string;
   totalMinutesInside?: number | null;
   createdAt: string;
   updatedAt: string;
 }
+
+export interface GeofenceSettings {
+  id?: string;
+  latitude: number;
+  longitude: number;
+  radiusMeters: number;
+  enabled: boolean;
+  version?: string;
+  address?: string;
+  updatedAt: string;
+  updatedBy?: string;
+}
+
+export type GeofenceStudentState =
+  | 'INSIDE'
+  | 'OUTSIDE'
+  | 'WAITING_FOR_LOCATION'
+  | 'VERIFYING_ENTRY'
+  | 'VERIFYING_EXIT';
 
 export interface StudentMeResponse {
   student: StudentInfo;
@@ -63,9 +89,13 @@ export interface StudentMeResponse {
     timestamp: string;
     timeFormatted: string;
     location?: LocationData | null;
+    triggerType?: 'MANUAL' | 'GEOFENCE_AUTO';
+    geofenceVersion?: string;
   } | null;
   todayEvents: ActivityEvent[];
   serverTime: string;
+  geofenceSettings: GeofenceSettings | null;
+  isFirstManualInDoneToday: boolean;
 }
 
 export interface AdminSummary {
@@ -74,6 +104,7 @@ export interface AdminSummary {
   absentToday: number;
   currentlyInside: number;
   totalActions: number;
+  geofenceEnabled?: boolean;
 }
 
 export interface StudentDayRow {
@@ -89,18 +120,21 @@ export interface StudentDayRow {
     timestamp: string;
     timeFormatted: string;
     location?: LocationData | null;
+    triggerType?: 'MANUAL' | 'GEOFENCE_AUTO';
   } | null;
   events: ActivityEvent[];
   totalVisits: number;
   totalMinutesInside: number;
   activeSessionId?: string | null;
   lastLocation?: LocationData | null;
+  geofenceState?: GeofenceStudentState;
 }
 
 export interface AdminAttendanceReport {
   date: string;
   summary: AdminSummary;
   students: StudentDayRow[];
+  geofenceSettings?: GeofenceSettings | null;
 }
 
 export interface StudentHistoryDayGroup {

@@ -19,13 +19,14 @@
     },
     "AttendanceEvent": {
       "title": "AttendanceEvent",
-      "description": "Library entry or exit event with GPS location coordinates",
+      "description": "Library entry or exit event with GPS location coordinates and geofence tracking metadata",
       "type": "object",
       "properties": {
         "id": { "type": "string" },
         "studentId": { "type": "string" },
         "studentName": { "type": "string", "maxLength": 200 },
         "action": { "type": "string", "enum": ["IN", "OUT"] },
+        "triggerType": { "type": "string", "enum": ["MANUAL", "GEOFENCE_AUTO"] },
         "timestamp": { "type": "string" },
         "dateKey": { "type": "string", "maxLength": 10 },
         "location": {
@@ -36,6 +37,9 @@
             "accuracy": { "type": "number" }
           }
         },
+        "geofenceId": { "type": "string" },
+        "geofenceVersion": { "type": "string" },
+        "dwellMinutes": { "type": "number" },
         "createdAt": { "type": "string" }
       },
       "required": ["id", "studentId", "action", "timestamp", "dateKey", "createdAt"]
@@ -54,6 +58,8 @@
         "inLocation": { "type": "object" },
         "outLocation": { "type": "object" },
         "lastLocation": { "type": "object" },
+        "triggerType": { "type": "string", "enum": ["MANUAL", "GEOFENCE_AUTO"] },
+        "geofenceVersion": { "type": "string" },
         "status": { "type": "string", "enum": ["INSIDE", "OUTSIDE"] },
         "totalMinutesInside": { "type": "number" },
         "createdAt": { "type": "string" },
@@ -76,6 +82,23 @@
         "sequenceNumber": { "type": "number" }
       },
       "required": ["id", "sessionId", "studentId", "latitude", "longitude", "timestamp", "sequenceNumber"]
+    },
+    "GeofenceSettings": {
+      "title": "GeofenceSettings",
+      "description": "Admin-configured library attendance location coordinates and allowable radius",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "latitude": { "type": "number" },
+        "longitude": { "type": "number" },
+        "radiusMeters": { "type": "number" },
+        "enabled": { "type": "boolean" },
+        "version": { "type": "string" },
+        "address": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "updatedBy": { "type": "string" }
+      },
+      "required": ["latitude", "longitude", "radiusMeters", "enabled", "updatedAt"]
     }
   },
   "firestore": {
@@ -94,6 +117,10 @@
     "/attendanceSessions/{sessionId}/locations/{locationId}": {
       "schema": "SessionLocationPoint",
       "description": "Ordered GPS location track points for an attendance session"
+    },
+    "/geofenceSettings/{settingId}": {
+      "schema": "GeofenceSettings",
+      "description": "Library official attendance location geofence configuration"
     }
   }
 }
