@@ -220,6 +220,87 @@ router.post('/students/me/attendance', requireStudentAuth, (req: Request, res: R
 });
 
 /**
+ * NATIVE ANDROID & BACKGROUND ATTENDANCE ENDPOINT
+ * Authoritative, idempotent endpoint for Android GeofenceBroadcastReceiver,
+ * background workers, and offline sync.
+ */
+router.post('/attendance/mark', (req: Request, res: Response) => {
+  const { studentId, action, triggerType, location, dwellMinutes, eventId, geofenceVersion } = req.body;
+  const timeZone = (req.headers['x-client-timezone'] as string) || undefined;
+
+  if (!studentId || typeof studentId !== 'string') {
+    return res.status(400).json({ error: 'Valid studentId is required.' });
+  }
+
+  if (action !== 'IN' && action !== 'OUT') {
+    return res.status(400).json({ error: "Invalid action. Must be 'IN' or 'OUT'." });
+  }
+
+  const student = getStudentById(studentId);
+  if (!student) {
+    return res.status(404).json({ error: 'Student not found.' });
+  }
+  if (student.status !== 'active') {
+    return res.status(403).json({ error: 'Student account is inactive.' });
+  }
+
+  // Validate location if provided
+  let validatedLoc: { latitude: number; longitude: number; accuracy?: number | null } | null = null;
+  if (location && typeof location === 'object') {
+    const lat = Number(location.latitude);
+    const lng = Number(location.longitude);
+    const acc = location.accuracy != null ? Number(location.accuracy) : null;
+    if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+      validatedLoc = { latitude: lat, longitude: lng, accuracy: acc };
+    }
+  }
+
+  try {
+    const { event, newStatus, duplicate } = recordAttendance(
+      studentId,
+      action,
+      timeZone,
+      validatedLoc,
+      {
+        triggerType: triggerType === 'GEOFENCE_AUTO' ? 'GEOFENCE_AUTO' : 'MANUAL',
+        geofenceVersion: typeof geofenceVersion === 'string' ? geofenceVersion : undefined,
+        dwellMinutes: typeof dwellMinutes === 'number' ? dwellMinutes : undefined,
+        eventId: typeof eventId === 'string' ? eventId : undefined,
+      }
+    );
+
+    // If not a duplicate, broadcast SSE update to active Admin dashboards
+    if (!duplicate) {
+      broadcastAttendanceUpdate({
+        studentId: student.id,
+        studentName: student.full_name,
+        action: event.action,
+        timestamp: event.timestamp,
+        dateKey: event.date_key,
+        location: event.location || null,
+      });
+    }
+
+    return res.json({
+      success: true,
+      duplicate: !!duplicate,
+      message: duplicate ? `Attendance already recorded.` : `Attendance marked ${action} successfully.`,
+      currentStatus: newStatus,
+      event: {
+        id: event.id,
+        action: event.action,
+        triggerType: event.trigger_type,
+        timestamp: event.timestamp,
+        timeFormatted: formatLocalTime(event.timestamp, timeZone),
+        location: event.location || null,
+      },
+    });
+  } catch (err: any) {
+    return res.status(400).json({ error: err.message || 'Unable to record attendance.' });
+  }
+});
+
+/**
  * Student Logout
  */
 router.post('/students/logout', requireStudentAuth, (req: Request, res: Response) => {

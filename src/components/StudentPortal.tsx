@@ -219,6 +219,32 @@ export function StudentPortal({ student, onLogout, onStatusChange }: StudentPort
 
   const dwellTargetSeconds = useFastTestDwell ? 15 : DEFAULT_GEOFENCE_DWELL_SECONDS;
 
+  // Native Android Bridge integration for OS-level background geofencing
+  const isNativeAndroid = typeof (window as any).AndroidBridge !== 'undefined';
+
+  useEffect(() => {
+    if (isNativeAndroid && student?.id) {
+      try {
+        (window as any).AndroidBridge?.setStudentSession?.(
+          student.id,
+          student.fullName,
+          student.seatNumber || 0,
+          api.getStudentToken() || ''
+        );
+        if (geofenceSettings) {
+          (window as any).AndroidBridge?.registerGeofence?.(
+            geofenceSettings.latitude,
+            geofenceSettings.longitude,
+            geofenceSettings.radiusMeters,
+            geofenceSettings.version || 'v1'
+          );
+        }
+      } catch (err) {
+        console.warn('AndroidBridge sync notice:', err);
+      }
+    }
+  }, [isNativeAndroid, student?.id, student?.fullName, student?.seatNumber, geofenceSettings]);
+
   // 1. Subscribe to Geofence Settings updates
   useEffect(() => {
     const unsub = api.subscribeToGeofenceSettings((settings) => {
@@ -1036,6 +1062,11 @@ export function StudentPortal({ student, onLogout, onStatusChange }: StudentPort
       exitStartTimeRef.current = null;
     }
 
+    // Synchronize with native Android companion bridge
+    try {
+      (window as any).AndroidBridge?.notifyManualAttendance?.(actionToTake);
+    } catch {}
+
     setSubmittingStep(
       `Location locked (±${Math.round(capturedLoc.accuracy || 0)}m). Recording ${actionToTake}...`
     );
@@ -1338,6 +1369,64 @@ export function StudentPortal({ student, onLogout, onStatusChange }: StudentPort
 
         {/* AUTOMATION & GEOFENCE STATUS SECTION */}
         <div className="mt-4 p-4 rounded-xl border border-stone-200 bg-stone-50/50 space-y-3">
+          {/* Native Android Hardware Geofencing Indicator */}
+          {isNativeAndroid ? (
+            <div className="p-3 bg-emerald-900 text-white rounded-xl text-xs space-y-2 shadow-sm">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 font-bold">
+                  <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                  <span>Native Android Hardware Geofencing Active</span>
+                </div>
+                <span className="px-2 py-0.5 rounded-full bg-emerald-800 text-[10px] font-mono text-emerald-200">
+                  OS Level
+                </span>
+              </div>
+              <p className="text-emerald-100 text-[11px] leading-relaxed">
+                Hardware geofencing is registered with Google Play Services. Automatic entry and exit detection works reliably even when this app is completely closed, swiped away from recent tasks, or your phone is locked.
+              </p>
+              <div className="flex items-center gap-2 pt-0.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    try {
+                      (window as any).AndroidBridge?.openBatteryOptimizationSettings?.();
+                    } catch {}
+                  }}
+                  className="px-2.5 py-1 bg-emerald-800 hover:bg-emerald-700 text-emerald-100 rounded text-[11px] font-semibold transition cursor-pointer"
+                >
+                  Battery Optimization Settings
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    try {
+                      (window as any).AndroidBridge?.requestBackgroundLocation?.();
+                    } catch {}
+                  }}
+                  className="px-2.5 py-1 bg-emerald-800 hover:bg-emerald-700 text-emerald-100 rounded text-[11px] font-semibold transition cursor-pointer"
+                >
+                  Background Permission
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="p-3 bg-white border border-stone-200 rounded-xl text-xs text-stone-700 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-2xs">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4 text-amber-700 shrink-0" />
+                <span className="text-[11px] text-stone-600">
+                  <strong className="text-stone-800">Closed-App Android Geofencing:</strong> Native Android companion registered with Google Play Services is available for 100% background attendance without keeping this tab open.
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowBackgroundInfo(true)}
+                className="text-amber-800 hover:text-amber-900 font-bold underline text-[11px] cursor-pointer shrink-0 self-start sm:self-auto"
+              >
+                Learn More
+              </button>
+            </div>
+          )}
+
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Shield className="w-4 h-4 text-amber-700" />

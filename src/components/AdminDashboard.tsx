@@ -690,8 +690,19 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
                                   INSIDE
                                 </span>
                                 {student.lastAction && (
-                                  <div className="text-[11px] text-stone-600 font-mono">
-                                    IN {student.lastAction.timeFormatted}
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <div className="text-[11px] text-stone-700 font-mono font-medium">
+                                      IN {student.lastAction.timeFormatted}
+                                    </div>
+                                    <span
+                                      className={`text-[9px] font-bold px-1.5 py-0.5 rounded border font-mono ${
+                                        student.lastAction.triggerType === 'GEOFENCE_AUTO'
+                                          ? 'bg-purple-100 text-purple-800 border-purple-300'
+                                          : 'bg-stone-100 text-stone-700 border-stone-300'
+                                      }`}
+                                    >
+                                      {student.lastAction.triggerType === 'GEOFENCE_AUTO' ? 'AUTO' : 'MANUAL'}
+                                    </span>
                                   </div>
                                 )}
                                 {student.lastAction?.location && (
@@ -719,8 +730,19 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
                                   OUTSIDE
                                 </span>
                                 {student.lastAction && (
-                                  <div className="text-[11px] text-stone-600 font-mono">
-                                    OUT {student.lastAction.timeFormatted}
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <div className="text-[11px] text-stone-700 font-mono font-medium">
+                                      OUT {student.lastAction.timeFormatted}
+                                    </div>
+                                    <span
+                                      className={`text-[9px] font-bold px-1.5 py-0.5 rounded border font-mono ${
+                                        student.lastAction.triggerType === 'GEOFENCE_AUTO'
+                                          ? 'bg-purple-100 text-purple-800 border-purple-300'
+                                          : 'bg-stone-100 text-stone-700 border-stone-300'
+                                      }`}
+                                    >
+                                      {student.lastAction.triggerType === 'GEOFENCE_AUTO' ? 'AUTO' : 'MANUAL'}
+                                    </span>
                                   </div>
                                 )}
                                 {student.lastAction?.location && (

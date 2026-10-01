@@ -157,6 +157,29 @@
         "updatedAt": { "type": "string" }
       },
       "required": ["studentId", "status", "dwellStartTimestamp", "requiredDwellSeconds", "createdAt", "updatedAt"]
+    },
+    "AttendanceDwellState": {
+      "title": "AttendanceDwellState",
+      "description": "Persistent 1-minute background dwell verification state for Android and Web",
+      "type": "object",
+      "properties": {
+        "studentId": { "type": "string" },
+        "status": { "type": "string", "enum": ["WAITING_FOR_DWELL", "VERIFIED", "CANCELLED"] },
+        "dwellStartTimestamp": { "type": "string" },
+        "requiredDwellSeconds": { "type": "number" },
+        "geofenceVersion": { "type": "string" },
+        "enterLocation": {
+          "type": "object",
+          "properties": {
+            "latitude": { "type": "number" },
+            "longitude": { "type": "number" },
+            "accuracy": { "type": "number" }
+          }
+        },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["studentId", "status", "dwellStartTimestamp", "requiredDwellSeconds", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -191,6 +214,10 @@
     "/pendingGeofenceEntries/{studentId}": {
       "schema": "PendingGeofenceEntry",
       "description": "Persistent 1-minute return-IN geofence dwell countdown state per student"
+    },
+    "/attendanceDwellStates/{studentId}": {
+      "schema": "AttendanceDwellState",
+      "description": "Persistent 1-minute background dwell verification state for Android and Web"
     }
   }
 }

@@ -74,6 +74,12 @@ service cloud.firestore {
       allow read: if true;
       allow write: if (isSignedIn() || request.auth == null);
     }
+
+    // Attendance dwell states for native Android and Web persistent tracking
+    match /attendanceDwellStates/{studentId} {
+      allow read: if true;
+      allow write: if (isSignedIn() || request.auth == null);
+    }
   }
 }
 

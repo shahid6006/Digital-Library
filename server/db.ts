@@ -137,6 +137,9 @@ export interface AttendanceEvent {
   longitude?: number | null;
   accuracy?: number | null;
   location?: LocationData | null;
+  trigger_type?: 'MANUAL' | 'GEOFENCE_AUTO';
+  geofence_version?: string | null;
+  dwell_minutes?: number | null;
   created_at: string;
 }
 
@@ -531,21 +534,68 @@ export function recordAttendance(
   studentId: string,
   requestedAction: 'IN' | 'OUT',
   clientTimezone?: string,
-  location?: { latitude: number; longitude: number; accuracy?: number | null } | null
-): { event: AttendanceEvent; newStatus: 'INSIDE' | 'OUTSIDE' } {
+  location?: { latitude: number; longitude: number; accuracy?: number | null } | null,
+  options?: {
+    triggerType?: 'MANUAL' | 'GEOFENCE_AUTO';
+    geofenceVersion?: string;
+    dwellMinutes?: number;
+    eventId?: string;
+  }
+): { event: AttendanceEvent; newStatus: 'INSIDE' | 'OUTSIDE'; duplicate?: boolean } {
   const student = getStudentById(studentId);
   if (!student || student.status !== 'active') {
     throw new Error('Your library registration is currently inactive. Please contact the administrator.');
   }
 
-  const { status: currentStatus } = getStudentCurrentStatus(studentId);
-
-  if (requestedAction === 'IN') {
-    if (currentStatus === 'INSIDE') {
-      throw new Error('Invalid action: You are already marked INSIDE the library.');
+  // Idempotency: Check if this specific eventId was already processed
+  const requestedEventId = options?.eventId;
+  if (requestedEventId) {
+    const existingEvt = db.prepare('SELECT * FROM attendance_events WHERE id = ?').get(requestedEventId) as any;
+    if (existingEvt) {
+      const { status: curStatus } = getStudentCurrentStatus(studentId);
+      return {
+        event: {
+          id: existingEvt.id,
+          student_id: existingEvt.student_id,
+          action: existingEvt.action,
+          timestamp: existingEvt.timestamp,
+          date_key: existingEvt.date_key,
+          latitude: existingEvt.latitude,
+          longitude: existingEvt.longitude,
+          accuracy: existingEvt.accuracy,
+          trigger_type: existingEvt.trigger_type || 'MANUAL',
+          geofence_version: existingEvt.geofence_version,
+          dwell_minutes: existingEvt.dwell_minutes,
+          location:
+            existingEvt.latitude != null && existingEvt.longitude != null
+              ? { latitude: existingEvt.latitude, longitude: existingEvt.longitude, accuracy: existingEvt.accuracy }
+              : null,
+          created_at: existingEvt.created_at,
+        },
+        newStatus: curStatus,
+        duplicate: true,
+      };
     }
-  } else if (requestedAction === 'OUT') {
-    if (currentStatus === 'OUTSIDE') {
+  }
+
+  const { status: currentStatus, lastEvent } = getStudentCurrentStatus(studentId);
+
+  // If already in the target status (e.g., duplicate OS geofence trigger)
+  const isAlreadyInRequestedStatus =
+    (requestedAction === 'IN' && currentStatus === 'INSIDE') ||
+    (requestedAction === 'OUT' && currentStatus === 'OUTSIDE');
+
+  if (isAlreadyInRequestedStatus) {
+    if (lastEvent) {
+      return {
+        event: lastEvent,
+        newStatus: currentStatus,
+        duplicate: true,
+      };
+    }
+    if (requestedAction === 'IN') {
+      throw new Error('Invalid action: You are already marked INSIDE the library.');
+    } else {
       throw new Error('Invalid action: You are already marked OUTSIDE the library.');
     }
   }
@@ -553,18 +603,21 @@ export function recordAttendance(
   const now = new Date();
   const timestamp = now.toISOString();
   const dateKey = computeDateKey(timestamp, clientTimezone);
-  const id = `evt_${crypto.randomUUID()}`;
+  const id = requestedEventId || `evt_${crypto.randomUUID()}`;
+  const triggerType = options?.triggerType || 'MANUAL';
+  const geofenceVersion = options?.geofenceVersion || null;
+  const dwellMinutes = options?.dwellMinutes != null ? options.dwellMinutes : (triggerType === 'GEOFENCE_AUTO' && requestedAction === 'IN' ? 1 : null);
 
   const lat = location && typeof location.latitude === 'number' ? location.latitude : null;
   const lng = location && typeof location.longitude === 'number' ? location.longitude : null;
   const acc = location && typeof location.accuracy === 'number' ? location.accuracy : null;
 
   const insertStmt = db.prepare(`
-    INSERT INTO attendance_events (id, student_id, action, timestamp, date_key, latitude, longitude, accuracy, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO attendance_events (id, student_id, action, timestamp, date_key, latitude, longitude, accuracy, trigger_type, geofence_version, dwell_minutes, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
-  insertStmt.run(id, studentId, requestedAction, timestamp, dateKey, lat, lng, acc, timestamp);
+  insertStmt.run(id, studentId, requestedAction, timestamp, dateKey, lat, lng, acc, triggerType, geofenceVersion, dwellMinutes, timestamp);
 
   const event: AttendanceEvent = {
     id,
@@ -575,6 +628,9 @@ export function recordAttendance(
     latitude: lat,
     longitude: lng,
     accuracy: acc,
+    trigger_type: triggerType,
+    geofence_version: geofenceVersion,
+    dwell_minutes: dwellMinutes,
     location: lat != null && lng != null ? { latitude: lat, longitude: lng, accuracy: acc } : null,
     created_at: timestamp,
   };
