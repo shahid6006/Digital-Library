@@ -45,7 +45,29 @@ service cloud.firestore {
     // Geofence settings collection (Library attendance location & allowed radius)
     match /geofenceSettings/{settingId} {
       allow read: if true;
-      allow write: if true;
+      allow write: if (isSignedIn() || request.auth == null)
+        && request.resource.data.latitude is number
+        && request.resource.data.longitude is number
+        && request.resource.data.radiusMeters is number
+        && request.resource.data.radiusMeters >= 10
+        && request.resource.data.enabled is bool;
+    }
+
+    // Notifications collection (Admin broadcasts, personal alerts, and system events)
+    match /notifications/{notificationId} {
+      allow read: if true;
+      allow create: if (isSignedIn() || request.auth == null)
+        && request.resource.data.title is string
+        && request.resource.data.message is string;
+      allow update: if (isSignedIn() || request.auth == null);
+      allow delete: if (isSignedIn() || request.auth == null);
+    }
+
+    // Membership periods collection
+    match /membershipPeriods/{periodId} {
+      allow read: if true;
+      allow write: if (isSignedIn() || request.auth == null);
     }
   }
 }
+

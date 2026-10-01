@@ -32,6 +32,11 @@ import type {
   AttendanceSession,
   SessionLocationPoint,
   GeofenceSettings,
+  NotificationItem,
+  NotificationCategory,
+  NotificationPriority,
+  MembershipPeriod,
+  OfflineAttendanceEvent,
 } from '../types';
 
 export enum OperationType {
@@ -264,6 +269,7 @@ export const firebaseService = {
         fullName: data.fullName,
         status: data.active ? 'active' : 'inactive',
         createdAt: data.createdAt,
+        dateOfJoining: data.dateOfJoining || data.createdAt?.split('T')[0] || '',
       };
     } catch (err) {
       console.warn('Student session check notice:', err);
@@ -330,6 +336,7 @@ export const firebaseService = {
       fullName: data.fullName,
       status: 'active',
       createdAt: data.createdAt,
+      dateOfJoining: data.dateOfJoining || data.createdAt?.split('T')[0] || '',
     };
   },
 
@@ -391,7 +398,10 @@ export const firebaseService = {
     studentId: string,
     studentName: string,
     requestedAction: 'IN' | 'OUT',
-    location?: LocationData | null
+    location?: LocationData | null,
+    triggerType: 'MANUAL' | 'GEOFENCE_AUTO' = 'MANUAL',
+    geofenceVersion?: string,
+    dwellMinutes?: number
   ): Promise<{
     event: ActivityEvent;
     newStatus: 'INSIDE' | 'OUTSIDE';
@@ -414,6 +424,9 @@ export const firebaseService = {
       studentId,
       studentName,
       action: requestedAction,
+      triggerType,
+      geofenceVersion: geofenceVersion || null,
+      dwellMinutes: dwellMinutes ?? (triggerType === 'GEOFENCE_AUTO' && requestedAction === 'IN' ? 10 : null),
       timestamp,
       dateKey,
       location:
@@ -435,7 +448,12 @@ export const firebaseService = {
 
     const event: ActivityEvent = {
       id: eventId,
+      studentId,
+      studentName,
       action: requestedAction,
+      triggerType,
+      geofenceVersion,
+      dwellMinutes: eventPayload.dwellMinutes,
       timestamp,
       timeFormatted: formatLocalTime(timestamp),
       location: eventPayload.location,
@@ -448,13 +466,16 @@ export const firebaseService = {
   },
 
   /**
-   * Starts an attendance session when student presses IN.
+   * Starts an attendance session when student presses IN or automatic geofence triggers IN.
    * Real GPS tracking is initiated.
    */
   async startAttendanceSession(
     studentId: string,
     studentName: string,
-    inLocation: LocationData
+    inLocation: LocationData,
+    triggerType: 'MANUAL' | 'GEOFENCE_AUTO' = 'MANUAL',
+    geofenceVersion?: string,
+    dwellMinutes?: number
   ): Promise<{
     session: AttendanceSession;
     event: ActivityEvent;
@@ -487,6 +508,8 @@ export const firebaseService = {
       dateKey,
       inTimestamp,
       outTimestamp: null,
+      triggerType,
+      geofenceVersion: geofenceVersion || undefined,
       inLocation: {
         latitude: inLocation.latitude,
         longitude: inLocation.longitude,
@@ -534,11 +557,14 @@ export const firebaseService = {
     }
 
     // 3. Record attendance event for legacy and date-wise summary reporting
-    const eventPayload = {
+    const eventPayload: any = {
       id: eventId,
       studentId,
       studentName,
       action: 'IN',
+      triggerType,
+      geofenceVersion: geofenceVersion || null,
+      dwellMinutes: dwellMinutes ?? (triggerType === 'GEOFENCE_AUTO' ? 10 : null),
       timestamp: inTimestamp,
       dateKey,
       location: sessionPayload.inLocation,
@@ -552,7 +578,12 @@ export const firebaseService = {
 
     const event: ActivityEvent = {
       id: eventId,
+      studentId,
+      studentName,
       action: 'IN',
+      triggerType,
+      geofenceVersion,
+      dwellMinutes: eventPayload.dwellMinutes,
       timestamp: inTimestamp,
       timeFormatted: formatLocalTime(inTimestamp),
       location: sessionPayload.inLocation,
@@ -612,13 +643,15 @@ export const firebaseService = {
   },
 
   /**
-   * Completes attendance session when student presses OUT.
+   * Completes attendance session when student presses OUT or automatic geofence triggers OUT.
    * Stops live tracking and preserves historical route.
    */
   async endAttendanceSession(
     studentId: string,
     sessionId: string,
-    outLocation?: LocationData | null
+    outLocation?: LocationData | null,
+    triggerType: 'MANUAL' | 'GEOFENCE_AUTO' = 'MANUAL',
+    geofenceVersion?: string
   ): Promise<{
     session: AttendanceSession;
     event: ActivityEvent;
@@ -679,10 +712,12 @@ export const firebaseService = {
     }
 
     // Update session document
-    const updatePayload = {
+    const updatePayload: any = {
       status: 'OUTSIDE',
       outTimestamp,
       outLocation: outLocObj,
+      triggerType,
+      geofenceVersion: geofenceVersion || currentData.geofenceVersion || null,
       lastLocation: outLocObj
         ? {
             ...outLocObj,
@@ -700,11 +735,13 @@ export const firebaseService = {
     }
 
     // Record OUT event in attendanceEvents
-    const eventPayload = {
+    const eventPayload: any = {
       id: eventId,
       studentId,
       studentName: currentData.studentName,
       action: 'OUT',
+      triggerType,
+      geofenceVersion: geofenceVersion || currentData.geofenceVersion || null,
       timestamp: outTimestamp,
       dateKey: currentData.dateKey,
       location: outLocObj,
@@ -718,7 +755,11 @@ export const firebaseService = {
 
     const event: ActivityEvent = {
       id: eventId,
+      studentId,
+      studentName: currentData.studentName,
       action: 'OUT',
+      triggerType,
+      geofenceVersion: eventPayload.geofenceVersion,
       timestamp: outTimestamp,
       timeFormatted: formatLocalTime(outTimestamp),
       location: outLocObj,
@@ -962,6 +1003,7 @@ export const firebaseService = {
               fullName: data.fullName,
               status: data.active ? 'active' : 'inactive',
               createdAt: data.createdAt,
+              dateOfJoining: data.dateOfJoining || data.createdAt?.split('T')[0] || '',
               totalEvents,
               lastAction,
             };
@@ -978,9 +1020,14 @@ export const firebaseService = {
   },
 
   /**
-   * Adds a new student into Firestore with duplicate detection
+   * Adds a new student into Firestore with duplicate detection and Date of Joining
    */
-  async addStudent(firstNameRaw: string, lastNameRaw: string, passwordRaw: string): Promise<StudentInfo> {
+  async addStudent(
+    firstNameRaw: string,
+    lastNameRaw: string,
+    passwordRaw: string,
+    dateOfJoiningRaw?: string
+  ): Promise<StudentInfo> {
     await this.ensureAuthReady();
 
     const { firstName, lastName, fullName, normalizedName } = normalizeStudentName(firstNameRaw, lastNameRaw);
@@ -988,6 +1035,12 @@ export const firebaseService = {
     if (!passwordRaw || passwordRaw.trim().length < 4) {
       throw new Error('Password must be at least 4 characters long.');
     }
+
+    if (!dateOfJoiningRaw || !dateOfJoiningRaw.trim()) {
+      throw new Error('Date of Joining is required.');
+    }
+
+    const dateOfJoining = dateOfJoiningRaw.trim();
 
     // Check for existing student with same normalized name
     const q = query(collection(db, 'students'), where('normalizedName', '==', normalizedName), limit(1));
@@ -1013,11 +1066,23 @@ export const firebaseService = {
       normalizedName,
       active: true,
       passwordHash,
+      dateOfJoining,
       createdAt: now,
     };
 
     try {
       await setDoc(doc(db, 'students', studentId), newStudentDoc);
+
+      // Create Admin system notification
+      this.createNotification({
+        recipientType: 'ADMIN',
+        title: 'New Student Added',
+        message: `New student registered: ${fullName} (Date of Joining: ${dateOfJoining}).`,
+        category: 'STUDENTS',
+        priority: 'normal',
+        createdBy: 'Admin',
+        metadata: { studentId, fullName, dateOfJoining },
+      }).catch(() => {});
     } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, 'students');
     }
@@ -1029,6 +1094,7 @@ export const firebaseService = {
       fullName,
       status: 'active',
       createdAt: now,
+      dateOfJoining,
     };
   },
 
@@ -1202,6 +1268,8 @@ export const firebaseService = {
                   timestamp: lastEvt.timestamp,
                   timeFormatted: formatLocalTime(lastEvt.timestamp),
                   location: lastEvt.location || null,
+                  triggerType: lastEvt.triggerType || 'MANUAL',
+                  geofenceVersion: lastEvt.geofenceVersion,
                 };
               }
 
@@ -1226,7 +1294,12 @@ export const firebaseService = {
 
                 return {
                   id: ev.id,
+                  studentId: ev.studentId,
+                  studentName: ev.studentName,
                   action: ev.action,
+                  triggerType: ev.triggerType || 'MANUAL',
+                  geofenceVersion: ev.geofenceVersion,
+                  dwellMinutes: ev.dwellMinutes,
                   timestamp: ev.timestamp,
                   timeFormatted: formatLocalTime(ev.timestamp),
                   location: ev.location || null,
@@ -1386,4 +1459,637 @@ export const firebaseService = {
       history: groupedList,
     };
   },
+
+  // --------------------------------------------------------------------------
+  // GEOFENCE SETTINGS & AUTOMATIC ATTENDANCE (Requirements 1, 2, 3, 10, 16, 17, 18)
+  // --------------------------------------------------------------------------
+  async getGeofenceSettings(): Promise<GeofenceSettings> {
+    await this.ensureAuthReady();
+    const docRef = doc(db, 'geofenceSettings', 'library');
+    try {
+      const snap = await getDoc(docRef);
+      if (snap.exists()) {
+        const data = snap.data();
+        return {
+          id: snap.id,
+          latitude: Number(data.latitude),
+          longitude: Number(data.longitude),
+          radiusMeters: Number(data.radiusMeters) || 100,
+          enabled: typeof data.enabled === 'boolean' ? data.enabled : true,
+          version: data.version || 'v1',
+          address: data.address || 'Digital Library Campus, Main Block',
+          updatedAt: data.updatedAt || new Date().toISOString(),
+          updatedBy: data.updatedBy || 'Admin',
+        };
+      }
+
+      // Default geofence configuration
+      const defaultSettings: GeofenceSettings = {
+        id: 'library',
+        latitude: 33.7782,
+        longitude: 75.1495,
+        radiusMeters: 100,
+        enabled: true,
+        version: 'v1',
+        address: 'Digital Library Campus, Main Block',
+        updatedAt: new Date().toISOString(),
+        updatedBy: 'Admin',
+      };
+
+      try {
+        await setDoc(docRef, defaultSettings);
+      } catch {
+        // Ignore if read-only
+      }
+      return defaultSettings;
+    } catch (err) {
+      console.warn('Geofence settings fetch notice, returning fallback:', err);
+      return {
+        id: 'library',
+        latitude: 33.7782,
+        longitude: 75.1495,
+        radiusMeters: 100,
+        enabled: true,
+        version: 'v1',
+        address: 'Digital Library Campus, Main Block',
+        updatedAt: new Date().toISOString(),
+        updatedBy: 'Admin',
+      };
+    }
+  },
+
+  async saveGeofenceSettings(
+    settings: {
+      latitude: number;
+      longitude: number;
+      radiusMeters: number;
+      enabled: boolean;
+      address?: string;
+    }
+  ): Promise<GeofenceSettings> {
+    await this.ensureAuthReady();
+    const version = `v_${Date.now()}`;
+    const updatedAt = new Date().toISOString();
+    const payload: GeofenceSettings = {
+      id: 'library',
+      latitude: Number(settings.latitude),
+      longitude: Number(settings.longitude),
+      radiusMeters: Math.max(10, Math.min(5000, Number(settings.radiusMeters))),
+      enabled: Boolean(settings.enabled),
+      version,
+      address: settings.address || 'Digital Library Campus',
+      updatedAt,
+      updatedBy: 'Admin',
+    };
+
+    try {
+      const docRef = doc(db, 'geofenceSettings', 'library');
+      await setDoc(docRef, payload);
+      return payload;
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'geofenceSettings/library');
+    }
+  },
+
+  subscribeToGeofenceSettings(callback: (settings: GeofenceSettings) => void): () => void {
+    const docRef = doc(db, 'geofenceSettings', 'library');
+    return onSnapshot(
+      docRef,
+      (snap) => {
+        if (snap.exists()) {
+          const data = snap.data();
+          callback({
+            id: snap.id,
+            latitude: Number(data.latitude),
+            longitude: Number(data.longitude),
+            radiusMeters: Number(data.radiusMeters) || 100,
+            enabled: typeof data.enabled === 'boolean' ? data.enabled : true,
+            version: data.version || 'v1',
+            address: data.address || '',
+            updatedAt: data.updatedAt || new Date().toISOString(),
+            updatedBy: data.updatedBy || 'Admin',
+          });
+        } else {
+          callback({
+            id: 'library',
+            latitude: 33.7782,
+            longitude: 75.1495,
+            radiusMeters: 100,
+            enabled: true,
+            version: 'v1',
+            address: 'Digital Library Campus, Main Block',
+            updatedAt: new Date().toISOString(),
+            updatedBy: 'Admin',
+          });
+        }
+      },
+      (error) => {
+        console.warn('Geofence settings snapshot warning:', error);
+      }
+    );
+  },
+
+  /**
+   * Checks whether student has performed at least one manual IN for the given dateKey
+   */
+  async checkFirstManualInDoneToday(studentId: string, dateKey: string): Promise<boolean> {
+    await this.ensureAuthReady();
+    try {
+      const q = query(
+        collection(db, 'attendanceEvents'),
+        where('studentId', '==', studentId),
+        where('dateKey', '==', dateKey),
+        where('action', '==', 'IN')
+      );
+      const snap = await getDocs(q);
+      return !snap.empty;
+    } catch {
+      return false;
+    }
+  },
+
+  // --------------------------------------------------------------------------
+  // NOTIFICATIONS SYSTEM (Features 1, 2, 3, 4, 14, 15)
+  // --------------------------------------------------------------------------
+
+  async createNotification(params: {
+    recipientType: 'ALL' | 'STUDENT' | 'ADMIN';
+    recipientStudentId?: string | null;
+    recipientStudentName?: string | null;
+    title: string;
+    message: string;
+    category: NotificationCategory;
+    priority?: NotificationPriority;
+    createdBy?: string;
+    dedupKey?: string;
+    metadata?: Record<string, any>;
+  }): Promise<NotificationItem> {
+    await this.ensureAuthReady();
+
+    if (params.dedupKey) {
+      try {
+        const q = query(
+          collection(db, 'notifications'),
+          where('dedupKey', '==', params.dedupKey),
+          limit(1)
+        );
+        const snap = await getDocs(q);
+        if (!snap.empty) {
+          return snap.docs[0].data() as NotificationItem;
+        }
+      } catch (err) {
+        console.warn('Dedup check query notice:', err);
+      }
+    }
+
+    const notifId = `notif_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    const nowIso = new Date().toISOString();
+
+    const notifData: NotificationItem = {
+      id: notifId,
+      recipientType: params.recipientType,
+      recipientStudentId: params.recipientStudentId || null,
+      recipientStudentName: params.recipientStudentName || null,
+      title: params.title,
+      message: params.message,
+      category: params.category,
+      priority: params.priority || 'normal',
+      read: false,
+      createdAt: nowIso,
+      createdBy: params.createdBy || 'System',
+      dedupKey: params.dedupKey || '',
+      metadata: params.metadata || {},
+    };
+
+    try {
+      await setDoc(doc(db, 'notifications', notifId), notifData);
+    } catch (err) {
+      console.warn('Failed to save notification doc:', err);
+    }
+
+    return notifData;
+  },
+
+  subscribeNotifications(
+    studentId: string | null,
+    isAdmin: boolean,
+    callback: (notifications: NotificationItem[]) => void
+  ): () => void {
+    const q = query(
+      collection(db, 'notifications'),
+      orderBy('createdAt', 'desc'),
+      limit(100)
+    );
+
+    return onSnapshot(
+      q,
+      (snap) => {
+        let list = snap.docs.map((d) => d.data() as NotificationItem);
+        if (isAdmin) {
+          list = list.filter(
+            (n) =>
+              n.recipientType === 'ADMIN' ||
+              n.recipientType === 'ALL' ||
+              n.category === 'SYSTEM' ||
+              n.category === 'MEMBERSHIP' ||
+              n.category === 'ATTENDANCE' ||
+              n.category === 'STUDENTS'
+          );
+        } else if (studentId) {
+          list = list.filter(
+            (n) =>
+              n.recipientType === 'ALL' ||
+              (n.recipientType === 'STUDENT' && n.recipientStudentId === studentId)
+          );
+        }
+        callback(list);
+      },
+      (err) => {
+        console.warn('Notifications snapshot warning:', err);
+      }
+    );
+  },
+
+  async markNotificationAsRead(id: string): Promise<void> {
+    await this.ensureAuthReady();
+    try {
+      await updateDoc(doc(db, 'notifications', id), { read: true });
+    } catch (err) {
+      console.warn('Mark notification read notice:', err);
+    }
+  },
+
+  async markAllNotificationsAsRead(
+    recipientType: 'ADMIN' | 'STUDENT',
+    studentId?: string
+  ): Promise<void> {
+    await this.ensureAuthReady();
+    try {
+      const q = query(
+        collection(db, 'notifications'),
+        where('read', '==', false),
+        limit(100)
+      );
+      const snap = await getDocs(q);
+      const batch = writeBatch(db);
+      let count = 0;
+      snap.docs.forEach((d) => {
+        const data = d.data() as NotificationItem;
+        if (recipientType === 'ADMIN') {
+          if (
+            data.recipientType === 'ADMIN' ||
+            data.recipientType === 'ALL' ||
+            data.category === 'SYSTEM' ||
+            data.category === 'MEMBERSHIP'
+          ) {
+            batch.update(d.ref, { read: true });
+            count++;
+          }
+        } else if (studentId) {
+          if (
+            data.recipientType === 'ALL' ||
+            (data.recipientType === 'STUDENT' && data.recipientStudentId === studentId)
+          ) {
+            batch.update(d.ref, { read: true });
+            count++;
+          }
+        }
+      });
+      if (count > 0) {
+        await batch.commit();
+      }
+    } catch (err) {
+      console.warn('Mark all read notice:', err);
+    }
+  },
+
+  async pruneOldNotifications(): Promise<void> {
+    await this.ensureAuthReady();
+    try {
+      const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+      const q = query(
+        collection(db, 'notifications'),
+        where('createdAt', '<', cutoff),
+        limit(50)
+      );
+      const snap = await getDocs(q);
+      if (!snap.empty) {
+        const batch = writeBatch(db);
+        snap.docs.forEach((d) => batch.delete(d.ref));
+        await batch.commit();
+      }
+    } catch (err) {
+      console.warn('Prune old notifications notice:', err);
+    }
+  },
+
+  // --------------------------------------------------------------------------
+  // MEMBERSHIP MONTH COMPLETIONS (Features 5, 19)
+  // --------------------------------------------------------------------------
+
+  async checkMembershipMonthCompletions(): Promise<void> {
+    await this.ensureAuthReady();
+    try {
+      const snap = await getDocs(query(collection(db, 'students'), where('active', '==', true)));
+      const today = new Date();
+
+      for (const docSnap of snap.docs) {
+        const student = docSnap.data();
+        const dateOfJoining = student.dateOfJoining || student.createdAt?.split('T')[0];
+        if (!dateOfJoining) continue;
+
+        const [y, m, d] = dateOfJoining.split('-').map(Number);
+        if (!y || !m || !d) continue;
+
+        let cycleStart = new Date(y, m - 1, d);
+
+        while (true) {
+          const cycleEnd = new Date(cycleStart);
+          cycleEnd.setMonth(cycleEnd.getMonth() + 1);
+          cycleEnd.setDate(cycleEnd.getDate() - 1);
+
+          if (today >= cycleEnd) {
+            const startStr = cycleStart.toISOString().split('T')[0];
+            const endStr = cycleEnd.toISOString().split('T')[0];
+            const dedupKey = `membership_${docSnap.id}_${startStr}_${endStr}`;
+
+            await this.createNotification({
+              recipientType: 'ADMIN',
+              recipientStudentId: docSnap.id,
+              recipientStudentName: student.fullName,
+              title: 'Membership Period Completed',
+              message: `Membership period completed: ${student.fullName}. Period: ${startStr} → ${endStr}. Please contact student for renewal.`,
+              category: 'MEMBERSHIP',
+              priority: 'important',
+              createdBy: 'System',
+              dedupKey,
+              metadata: {
+                studentId: docSnap.id,
+                studentName: student.fullName,
+                startDate: startStr,
+                endDate: endStr,
+              },
+            });
+
+            cycleStart = new Date(cycleEnd);
+            cycleStart.setDate(cycleStart.getDate() + 1);
+            if (cycleStart > today) break;
+          } else {
+            break;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Membership month completion check notice:', err);
+    }
+  },
+
+  // --------------------------------------------------------------------------
+  // OFFLINE ATTENDANCE SYNC (Features 9, 10, 11, 12, 13)
+  // --------------------------------------------------------------------------
+
+  async syncOfflineEvent(event: OfflineAttendanceEvent): Promise<boolean> {
+    await this.ensureAuthReady();
+    try {
+      // 1. Deduplication check
+      const q = query(
+        collection(db, 'attendanceEvents'),
+        where('studentId', '==', event.studentId),
+        where('timestamp', '==', event.timestamp),
+        limit(1)
+      );
+      const snap = await getDocs(q);
+      if (!snap.empty) {
+        return true; // Already stored
+      }
+
+      // 2. Validate student account
+      const stuRef = doc(db, 'students', event.studentId);
+      const stuSnap = await getDoc(stuRef);
+      if (!stuSnap.exists()) {
+        throw new Error(`Student ${event.studentId} does not exist in library database.`);
+      }
+
+      // 3. Process action
+      if (event.action === 'IN') {
+        if (!event.location) {
+          throw new Error('Valid GPS location is required to sync entry.');
+        }
+        await this.startAttendanceSession(
+          event.studentId,
+          event.studentName,
+          event.location,
+          event.triggerType,
+          event.geofenceVersion,
+          event.dwellMinutes
+        );
+      } else {
+        const active = await this.getActiveSession(event.studentId);
+        if (active) {
+          await this.endAttendanceSession(
+            event.studentId,
+            active.id,
+            event.location,
+            event.triggerType,
+            event.geofenceVersion
+          );
+        } else {
+          await this.recordAttendance(
+            event.studentId,
+            event.studentName,
+            'OUT',
+            event.location,
+            event.triggerType,
+            event.geofenceVersion
+          );
+        }
+      }
+
+      // 4. Create admin notification
+      await this.createNotification({
+        recipientType: 'ADMIN',
+        title: 'Offline Attendance Synchronized',
+        message: `Offline attendance event synchronized for ${event.studentName}: ${event.action} at ${event.timeFormatted}.`,
+        category: 'SYSTEM',
+        priority: 'normal',
+        createdBy: 'System',
+        metadata: {
+          studentId: event.studentId,
+          studentName: event.studentName,
+          action: event.action,
+          timestamp: event.timestamp,
+        },
+      });
+
+      return true;
+    } catch (err: any) {
+      console.error('syncOfflineEvent failed:', err);
+      await this.createNotification({
+        recipientType: 'ADMIN',
+        title: 'Synchronization Requires Review',
+        message: `Offline event synchronization failed for ${event.studentName} (${event.action}): ${err?.message || 'Validation error'}.`,
+        category: 'SYSTEM',
+        priority: 'important',
+        createdBy: 'System',
+        metadata: {
+          studentId: event.studentId,
+          studentName: event.studentName,
+          error: err?.message,
+        },
+      }).catch(() => {});
+      return false;
+    }
+  },
+
+  // --------------------------------------------------------------------------
+  // DETAILED STUDENT PROFILE (Features 6, 7)
+  // --------------------------------------------------------------------------
+
+  async getStudentProfileDetails(studentId: string): Promise<{
+    personal: {
+      id: string;
+      firstName: string;
+      lastName: string;
+      fullName: string;
+      dateOfJoining: string;
+      accountStatus: 'active' | 'inactive';
+      createdAt: string;
+    };
+    attendance: {
+      totalDays: number;
+      currentStatus: 'INSIDE' | 'OUTSIDE';
+      totalVisits: number;
+      totalMinutesInside: number;
+      firstAttendanceDate: string | null;
+      latestAttendanceDate: string | null;
+    };
+    membership: {
+      dateOfJoining: string;
+      currentPeriodStart: string;
+      currentPeriodEnd: string;
+      expiryDate: string;
+      status: 'ACTIVE' | 'DUE' | 'EXPIRED';
+      totalPeriodsCompleted: number;
+    };
+  }> {
+    await this.ensureAuthReady();
+
+    const stuRef = doc(db, 'students', studentId);
+    const stuSnap = await getDoc(stuRef);
+    if (!stuSnap.exists()) {
+      throw new Error('Student profile not found.');
+    }
+
+    const stu = stuSnap.data();
+    const dateOfJoining = stu.dateOfJoining || stu.createdAt?.split('T')[0] || '2026-09-01';
+
+    // Query all student attendance events for stats
+    const evQ = query(
+      collection(db, 'attendanceEvents'),
+      where('studentId', '==', studentId),
+      orderBy('timestamp', 'asc')
+    );
+    const evSnap = await getDocs(evQ);
+
+    const datesSet = new Set<string>();
+    let totalVisits = 0;
+    let firstDate: string | null = null;
+    let latestDate: string | null = null;
+
+    evSnap.docs.forEach((d) => {
+      const e = d.data();
+      datesSet.add(e.dateKey);
+      if (e.action === 'IN') {
+        totalVisits++;
+      }
+      if (!firstDate) firstDate = e.dateKey;
+      latestDate = e.dateKey;
+    });
+
+    // Query all student sessions for total minutes inside
+    const sessQ = query(
+      collection(db, 'attendanceSessions'),
+      where('studentId', '==', studentId)
+    );
+    const sessSnap = await getDocs(sessQ);
+    let totalMinutesInside = 0;
+    sessSnap.docs.forEach((d) => {
+      const s = d.data();
+      if (s.totalMinutesInside) {
+        totalMinutesInside += Number(s.totalMinutesInside);
+      }
+    });
+
+    const activeSession = await this.getActiveSession(studentId);
+    const currentStatus = activeSession ? 'INSIDE' : 'OUTSIDE';
+
+    // Calculate membership period from dateOfJoining
+    const [y, m, d] = dateOfJoining.split('-').map(Number);
+    let currentPeriodStart = dateOfJoining;
+    let currentPeriodEnd = dateOfJoining;
+    let expiryDate = dateOfJoining;
+    let status: 'ACTIVE' | 'DUE' | 'EXPIRED' = 'ACTIVE';
+    let totalPeriodsCompleted = 0;
+
+    if (y && m && d) {
+      const today = new Date();
+      let cycleStart = new Date(y, m - 1, d);
+
+      while (true) {
+        const cycleEnd = new Date(cycleStart);
+        cycleEnd.setMonth(cycleEnd.getMonth() + 1);
+        cycleEnd.setDate(cycleEnd.getDate() - 1);
+
+        if (today > cycleEnd) {
+          totalPeriodsCompleted++;
+          cycleStart = new Date(cycleEnd);
+          cycleStart.setDate(cycleStart.getDate() + 1);
+        } else {
+          currentPeriodStart = cycleStart.toISOString().split('T')[0];
+          currentPeriodEnd = cycleEnd.toISOString().split('T')[0];
+          expiryDate = currentPeriodEnd;
+
+          // Check if due in next 3 days
+          const diffDays = Math.ceil((cycleEnd.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+          if (diffDays <= 0) {
+            status = 'EXPIRED';
+          } else if (diffDays <= 3) {
+            status = 'DUE';
+          } else {
+            status = 'ACTIVE';
+          }
+          break;
+        }
+      }
+    }
+
+    return {
+      personal: {
+        id: stuSnap.id,
+        firstName: stu.firstName,
+        lastName: stu.lastName,
+        fullName: stu.fullName,
+        dateOfJoining,
+        accountStatus: stu.active ? 'active' : 'inactive',
+        createdAt: stu.createdAt,
+      },
+      attendance: {
+        totalDays: datesSet.size,
+        currentStatus,
+        totalVisits,
+        totalMinutesInside,
+        firstAttendanceDate: firstDate,
+        latestAttendanceDate: latestDate,
+      },
+      membership: {
+        dateOfJoining,
+        currentPeriodStart,
+        currentPeriodEnd,
+        expiryDate,
+        status,
+        totalPeriodsCompleted,
+      },
+    };
+  },
 };
+

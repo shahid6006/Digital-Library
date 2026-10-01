@@ -19,6 +19,8 @@ import {
   validateAdminSession,
   deleteAdminSession,
   formatLocalTime,
+  getGeofenceSettingsFromDb,
+  saveGeofenceSettingsInDb,
 } from './db.ts';
 import { addSSEClient, removeSSEClient, broadcastAttendanceUpdate } from './sse.ts';
 
@@ -455,6 +457,49 @@ router.get('/admin/events', requireAdminAuth, (req: Request, res: Response) => {
     clearInterval(interval);
     removeSSEClient(clientId);
   });
+});
+
+/**
+ * Geofence Settings Endpoints
+ */
+router.get('/geofence', (_req: Request, res: Response) => {
+  try {
+    const settings = getGeofenceSettingsFromDb();
+    return res.json(settings);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to fetch geofence settings.' });
+  }
+});
+
+router.post('/geofence', requireAdminAuth, (req: Request, res: Response) => {
+  const { latitude, longitude, radiusMeters, enabled, address } = req.body;
+
+  if (typeof latitude !== 'number' || typeof longitude !== 'number') {
+    return res.status(400).json({ error: 'Valid latitude and longitude numbers are required.' });
+  }
+
+  const radius = Number(radiusMeters);
+  if (isNaN(radius) || radius < 10) {
+    return res.status(400).json({ error: 'Radius must be at least 10 meters.' });
+  }
+
+  try {
+    const saved = saveGeofenceSettingsInDb({
+      latitude,
+      longitude,
+      radiusMeters: radius,
+      enabled: typeof enabled === 'boolean' ? enabled : true,
+      address: typeof address === 'string' ? address.trim() : undefined,
+    });
+
+    return res.json({
+      success: true,
+      message: `Geofence location updated successfully with radius ${radius}m.`,
+      settings: saved,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to save geofence settings.' });
+  }
 });
 
 export function setupApiRoutes(app: any) {

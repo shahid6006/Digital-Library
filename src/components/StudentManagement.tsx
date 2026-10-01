@@ -17,6 +17,7 @@ import {
 import { api } from '../services/api';
 import type { RegisteredStudentItem } from '../types';
 import { StudentHistoryModal } from './StudentHistoryModal';
+import { AdminStudentProfileModal } from './AdminStudentProfileModal';
 
 export function StudentManagement() {
   const [students, setStudents] = useState<RegisteredStudentItem[]>([]);
@@ -31,9 +32,13 @@ export function StudentManagement() {
   const [lastName, setLastName] = useState<string>('');
   const [password, setPassword] = useState<string>('');
   const [confirmPassword, setConfirmPassword] = useState<string>('');
+  const [dateOfJoining, setDateOfJoining] = useState<string>('');
   const [showFormPassword, setShowFormPassword] = useState<boolean>(false);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [formFeedback, setFormFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  // Student Profile modal state
+  const [selectedStudentForProfile, setSelectedStudentForProfile] = useState<string | null>(null);
 
   // Reset password modal state
   const [resettingStudent, setResettingStudent] = useState<RegisteredStudentItem | null>(null);
@@ -104,9 +109,14 @@ export function StudentManagement() {
       return;
     }
 
+    if (!dateOfJoining) {
+      setFormFeedback({ type: 'error', message: 'Please select a Date of Joining using the date picker.' });
+      return;
+    }
+
     setIsSubmitting(true);
     try {
-      const res = await api.registerStudent(cleanFirst, cleanLast, password);
+      const res = await api.registerStudent(cleanFirst, cleanLast, password, dateOfJoining);
       setFormFeedback({
         type: 'success',
         message: res.message || `Student "${res.student.fullName}" registered successfully.`,
@@ -115,6 +125,7 @@ export function StudentManagement() {
       setLastName('');
       setPassword('');
       setConfirmPassword('');
+      setDateOfJoining('');
       loadStudents();
     } catch (err: any) {
       setFormFeedback({
@@ -397,6 +408,27 @@ export function StudentManagement() {
               </div>
             </div>
 
+            <div>
+              <label
+                htmlFor="addDateOfJoining"
+                className="block text-xs font-semibold uppercase tracking-wider text-stone-700 mb-1"
+              >
+                Date of Joining (Required for Monthly Membership)
+              </label>
+              <input
+                id="addDateOfJoining"
+                type="date"
+                required
+                value={dateOfJoining}
+                onChange={(e) => setDateOfJoining(e.target.value)}
+                className="w-full max-w-sm px-3 py-2 bg-stone-50 border border-stone-300 rounded-lg text-sm text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:bg-white transition"
+                disabled={isSubmitting}
+              />
+              <p className="text-[11px] text-stone-400 mt-1">
+                Select the official library registration date using the date picker.
+              </p>
+            </div>
+
             <div className="flex items-center gap-3 pt-1">
               <button
                 type="submit"
@@ -540,6 +572,7 @@ export function StudentManagement() {
                 <tr className="border-b border-stone-200 bg-stone-50/70 text-[11px] font-semibold uppercase tracking-wider text-stone-600">
                   <th className="py-3.5 px-6">Student Name</th>
                   <th className="py-3.5 px-6">Status</th>
+                  <th className="py-3.5 px-6">Date of Joining</th>
                   <th className="py-3.5 px-6">Attendance Records</th>
                   <th className="py-3.5 px-6 text-right">Actions</th>
                 </tr>
@@ -589,6 +622,13 @@ export function StudentManagement() {
                         </span>
                       </td>
 
+                      {/* Date of Joining */}
+                      <td className="py-4 px-6 align-middle">
+                        <div className="text-xs font-semibold text-stone-900">
+                          {student.dateOfJoining || 'Not set'}
+                        </div>
+                      </td>
+
                       {/* Attendance Records count */}
                       <td className="py-4 px-6 align-middle">
                         <div className="text-xs text-stone-700 font-medium">
@@ -599,9 +639,19 @@ export function StudentManagement() {
                         </div>
                       </td>
 
-                      {/* Action buttons: Reset Password | Deactivate/Activate | Delete */}
+                      {/* Action buttons: View Profile | Reset Password | Deactivate/Activate | Delete */}
                       <td className="py-4 px-6 align-middle text-right">
                         <div className="inline-flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedStudentForProfile(student.id)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-amber-900 bg-amber-100 hover:bg-amber-200 border border-amber-300 rounded-md transition cursor-pointer"
+                            title="View student profile"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                            <span>Profile</span>
+                          </button>
+
                           <button
                             type="button"
                             onClick={() => {
@@ -871,6 +921,16 @@ export function StudentManagement() {
         <StudentHistoryModal
           studentId={selectedStudentForHistory}
           onClose={() => setSelectedStudentForHistory(null)}
+        />
+      )}
+
+      {/* Admin Student Profile Modal (Feature 6) */}
+      {selectedStudentForProfile && (
+        <AdminStudentProfileModal
+          studentId={selectedStudentForProfile}
+          isOpen={!!selectedStudentForProfile}
+          onClose={() => setSelectedStudentForProfile(null)}
+          onStudentUpdated={loadStudents}
         />
       )}
     </div>

@@ -11,6 +11,7 @@ export interface StudentInfo {
   fullName: string;
   status?: 'active' | 'inactive';
   createdAt?: string;
+  dateOfJoining?: string; // YYYY-MM-DD
 }
 
 export interface ActivityEvent {
@@ -94,8 +95,8 @@ export interface StudentMeResponse {
   } | null;
   todayEvents: ActivityEvent[];
   serverTime: string;
-  geofenceSettings: GeofenceSettings | null;
-  isFirstManualInDoneToday: boolean;
+  geofenceSettings?: GeofenceSettings | null;
+  isFirstManualInDoneToday?: boolean;
 }
 
 export interface AdminSummary {
@@ -121,6 +122,7 @@ export interface StudentDayRow {
     timeFormatted: string;
     location?: LocationData | null;
     triggerType?: 'MANUAL' | 'GEOFENCE_AUTO';
+    geofenceVersion?: string;
   } | null;
   events: ActivityEvent[];
   totalVisits: number;
@@ -162,6 +164,7 @@ export interface RegisteredStudentItem {
   fullName: string;
   status: 'active' | 'inactive';
   createdAt: string;
+  dateOfJoining?: string;
   totalEvents: number;
   lastAction: {
     action: 'IN' | 'OUT';
@@ -169,3 +172,50 @@ export interface RegisteredStudentItem {
     location?: LocationData | null;
   } | null;
 }
+
+export type NotificationCategory = 'ATTENDANCE' | 'MEMBERSHIP' | 'STUDENTS' | 'SYSTEM';
+export type NotificationPriority = 'normal' | 'important';
+
+export interface NotificationItem {
+  id: string;
+  recipientType: 'ALL' | 'STUDENT' | 'ADMIN';
+  recipientStudentId?: string | null;
+  recipientStudentName?: string | null;
+  title: string;
+  message: string;
+  category: NotificationCategory;
+  priority: NotificationPriority;
+  read: boolean;
+  createdAt: string;
+  createdBy: string;
+  dedupKey?: string;
+  metadata?: Record<string, any>;
+}
+
+export interface MembershipPeriod {
+  id: string;
+  studentId: string;
+  studentName: string;
+  startDate: string; // YYYY-MM-DD
+  endDate: string; // YYYY-MM-DD
+  status: 'ACTIVE' | 'DUE' | 'EXPIRED' | 'RENEWED';
+  createdAt: string;
+  createdBy: string;
+}
+
+export interface OfflineAttendanceEvent {
+  localId: string;
+  studentId: string;
+  studentName: string;
+  action: 'IN' | 'OUT';
+  timestamp: string;
+  timeFormatted: string;
+  location: LocationData | null;
+  geofenceVersion?: string;
+  triggerType: 'MANUAL' | 'GEOFENCE_AUTO';
+  dwellMinutes?: number;
+  status: 'PENDING_SYNC' | 'SYNCED' | 'SYNC_REVIEW_REQUIRED';
+  queueCreatedAt: string;
+  syncError?: string;
+}
+

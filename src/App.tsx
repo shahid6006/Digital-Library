@@ -5,8 +5,9 @@ import { StudentPortal } from './components/StudentPortal';
 import { AdminLogin } from './components/AdminLogin';
 import { AdminDashboard } from './components/AdminDashboard';
 import { api } from './services/api';
+import { offlineQueue } from './services/offlineQueue';
 import type { StudentInfo } from './types';
-import { Library, User, Armchair, Instagram } from 'lucide-react';
+import { Library, User, Armchair, Instagram, WifiOff, RefreshCw, Check } from 'lucide-react';
 
 export default function App() {
   const [currentTab, setCurrentTab] = useState<'student' | 'admin'>('student');
@@ -14,6 +15,32 @@ export default function App() {
   const [studentStatus, setStudentStatus] = useState<'INSIDE' | 'OUTSIDE' | null>(null);
   const [isAdminLoggedIn, setIsAdminLoggedIn] = useState<boolean>(() => !!api.getAdminToken());
   const [isInitializing, setIsInitializing] = useState<boolean>(true);
+
+  // Network offline state (Feature 8)
+  const [isOnline, setIsOnline] = useState<boolean>(offlineQueue.isOnline());
+  const [syncBanner, setSyncBanner] = useState<string | null>(null);
+
+  useEffect(() => {
+    let wasOffline = false;
+    const unsub = offlineQueue.subscribeNetwork((online) => {
+      setIsOnline(online);
+      if (!online) {
+        wasOffline = true;
+        setSyncBanner('Internet disconnected');
+      } else if (wasOffline) {
+        wasOffline = false;
+        setSyncBanner('Internet connected — Syncing...');
+        offlineQueue.processQueue(async (evt) => {
+          return api.syncOfflineEvent(evt);
+        }).then(() => {
+          setSyncBanner('Sync complete ✓');
+          setTimeout(() => setSyncBanner(null), 3500);
+        });
+      }
+    });
+
+    return () => unsub();
+  }, []);
 
   // Initialize session verification from Firestore on website load
   useEffect(() => {
@@ -87,6 +114,28 @@ export default function App() {
         onStudentLogout={handleStudentLogout}
         onAdminLogout={handleAdminLogout}
       />
+
+      {/* Offline and Sync Banner (Feature 8) */}
+      {syncBanner && (
+        <div
+          className={`py-2 px-4 text-xs font-semibold text-center flex items-center justify-center gap-2 transition-all ${
+            syncBanner.includes('disconnected')
+              ? 'bg-stone-800 text-stone-200 border-b border-stone-700'
+              : syncBanner.includes('Syncing')
+              ? 'bg-amber-600 text-white'
+              : 'bg-emerald-600 text-white'
+          }`}
+        >
+          {syncBanner.includes('disconnected') ? (
+            <WifiOff className="w-3.5 h-3.5 text-stone-400" />
+          ) : syncBanner.includes('Syncing') ? (
+            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+          ) : (
+            <Check className="w-3.5 h-3.5" />
+          )}
+          <span>{syncBanner}</span>
+        </div>
+      )}
 
       {/* Main Content Area */}
       <main className="flex-1 py-8 px-4 sm:px-6 lg:px-8 max-w-7xl w-full mx-auto">

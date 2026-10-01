@@ -13,7 +13,8 @@
         "authEmail": { "type": "string", "maxLength": 254 },
         "authUid": { "type": "string", "maxLength": 128 },
         "active": { "type": "boolean" },
-        "createdAt": { "type": "string" }
+        "createdAt": { "type": "string" },
+        "dateOfJoining": { "type": "string" }
       },
       "required": ["id", "firstName", "lastName", "fullName", "normalizedName", "active", "createdAt"]
     },
@@ -99,6 +100,42 @@
         "updatedBy": { "type": "string" }
       },
       "required": ["latitude", "longitude", "radiusMeters", "enabled", "updatedAt"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "Library announcement, alert, or system event notification",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "recipientType": { "type": "string", "enum": ["ALL", "STUDENT", "ADMIN"] },
+        "recipientStudentId": { "type": "string" },
+        "recipientStudentName": { "type": "string" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "category": { "type": "string", "enum": ["ATTENDANCE", "MEMBERSHIP", "STUDENTS", "SYSTEM"] },
+        "priority": { "type": "string", "enum": ["normal", "important"] },
+        "read": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "dedupKey": { "type": "string" }
+      },
+      "required": ["id", "recipientType", "title", "message", "category", "priority", "read", "createdAt", "createdBy"]
+    },
+    "MembershipPeriod": {
+      "title": "MembershipPeriod",
+      "description": "Student monthly membership validity period",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "studentId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "startDate": { "type": "string" },
+        "endDate": { "type": "string" },
+        "status": { "type": "string", "enum": ["ACTIVE", "DUE", "EXPIRED", "RENEWED"] },
+        "createdAt": { "type": "string" },
+        "createdBy": { "type": "string" }
+      },
+      "required": ["id", "studentId", "studentName", "startDate", "endDate", "status", "createdAt", "createdBy"]
     }
   },
   "firestore": {
@@ -121,6 +158,14 @@
     "/geofenceSettings/{settingId}": {
       "schema": "GeofenceSettings",
       "description": "Library official attendance location geofence configuration"
+    },
+    "/notifications/{notificationId}": {
+      "schema": "Notification",
+      "description": "Broadcast, direct student notifications, and admin alerts"
+    },
+    "/membershipPeriods/{periodId}": {
+      "schema": "MembershipPeriod",
+      "description": "Historical and active student membership cycles"
     }
   }
 }

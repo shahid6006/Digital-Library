@@ -15,6 +15,7 @@ import {
   UserX,
   MapPin,
   Map,
+  Bell,
 } from 'lucide-react';
 import { api } from '../services/api';
 import type { AdminAttendanceReport, ActivityEvent } from '../types';
@@ -23,6 +24,8 @@ import { StudentManagement } from './StudentManagement';
 import { LocationModal } from './LocationModal';
 import { LocationHistoryView } from './LocationHistoryView';
 import { AdminLiveMapView } from './AdminLiveMapView';
+import { AdminGeofenceSettings } from './AdminGeofenceSettings';
+import { AdminNotificationCenter } from './AdminNotificationCenter';
 
 interface AdminDashboardProps {
   onLogout: () => void;
@@ -62,8 +65,8 @@ function formatDateDisplay(dateKey: string): string {
 }
 
 export function AdminDashboard({ onLogout }: AdminDashboardProps) {
-  // Navigation between Daily Attendance view, Live GPS Map view, Location History view, and Student Management view
-  const [adminView, setAdminView] = useState<'attendance' | 'live_map' | 'location_history' | 'management'>('attendance');
+  // Navigation between Daily Attendance view, Live GPS Map view, Location History view, Geofence Settings, Student Management view, and Notifications
+  const [adminView, setAdminView] = useState<'attendance' | 'live_map' | 'location_history' | 'geofence' | 'management' | 'notifications'>('attendance');
 
   const [selectedDate, setSelectedDate] = useState<string>(getTodayDateKey());
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -73,6 +76,15 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
   const [error, setError] = useState<string | null>(null);
   const [selectedStudentForHistory, setSelectedStudentForHistory] = useState<string | null>(null);
   const [liveSyncNotification, setLiveSyncNotification] = useState<string | null>(null);
+  const [adminUnreadCount, setAdminUnreadCount] = useState<number>(0);
+
+  // Listen to unread notifications for admin badge
+  useEffect(() => {
+    const unsub = api.subscribeNotifications(null, true, (list) => {
+      setAdminUnreadCount(list.filter((n) => !n.read).length);
+    });
+    return () => unsub();
+  }, []);
 
   // FEATURE: Location Inspection Modal State
   const [selectedStudentForLocation, setSelectedStudentForLocation] = useState<{
@@ -235,6 +247,18 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
           </button>
           <button
             type="button"
+            onClick={() => setAdminView('geofence')}
+            className={`flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-md transition cursor-pointer ${
+              adminView === 'geofence'
+                ? 'bg-white text-stone-900 shadow-2xs'
+                : 'text-stone-600 hover:text-stone-900'
+            }`}
+          >
+            <MapPin className="w-3.5 h-3.5 text-amber-700" />
+            <span>Attendance Location &amp; Geofence</span>
+          </button>
+          <button
+            type="button"
             onClick={() => setAdminView('management')}
             className={`px-4 py-2 text-xs font-semibold rounded-md transition cursor-pointer ${
               adminView === 'management'
@@ -243,6 +267,23 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
             }`}
           >
             Student Management
+          </button>
+          <button
+            type="button"
+            onClick={() => setAdminView('notifications')}
+            className={`flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-md transition cursor-pointer ${
+              adminView === 'notifications'
+                ? 'bg-white text-stone-900 shadow-2xs'
+                : 'text-stone-600 hover:text-stone-900'
+            }`}
+          >
+            <Bell className="w-3.5 h-3.5 text-amber-700" />
+            <span>Notification Center</span>
+            {adminUnreadCount > 0 && (
+              <span className="px-1.5 py-0.2 bg-amber-600 text-white rounded-full text-[10px] font-bold">
+                {adminUnreadCount}
+              </span>
+            )}
           </button>
         </div>
 
@@ -271,8 +312,12 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
       </div>
 
       {/* Render Selected View */}
-      {adminView === 'management' ? (
+      {adminView === 'notifications' ? (
+        <AdminNotificationCenter />
+      ) : adminView === 'management' ? (
         <StudentManagement />
+      ) : adminView === 'geofence' ? (
+        <AdminGeofenceSettings />
       ) : adminView === 'live_map' ? (
         <AdminLiveMapView />
       ) : adminView === 'location_history' ? (
@@ -710,6 +755,21 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
                                           <span className="text-rose-600 font-bold">🔴 OUT</span>
                                         )}
                                         <span>{evt.timeFormatted}</span>
+                                        {evt.triggerType === 'GEOFENCE_AUTO' ? (
+                                          <span
+                                            className="text-[9px] bg-purple-100 text-purple-800 border border-purple-200 px-1 py-0.5 rounded font-sans font-extrabold"
+                                            title="Triggered automatically by geofence"
+                                          >
+                                            ⚡ Auto
+                                          </span>
+                                        ) : (
+                                          <span
+                                            className="text-[9px] bg-stone-100 text-stone-600 border border-stone-200 px-1 py-0.5 rounded font-sans font-semibold"
+                                            title="Manually initiated check-in"
+                                          >
+                                            Manual
+                                          </span>
+                                        )}
                                         {evt.location && (
                                           <MapPin className="w-3 h-3 text-amber-700 ml-0.5" />
                                         )}

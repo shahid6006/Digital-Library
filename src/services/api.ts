@@ -9,6 +9,11 @@ import type {
   ActivityEvent,
   AttendanceSession,
   SessionLocationPoint,
+  GeofenceSettings,
+  NotificationItem,
+  NotificationCategory,
+  NotificationPriority,
+  OfflineAttendanceEvent,
 } from '../types';
 
 export const api = {
@@ -63,6 +68,13 @@ export const api = {
       }
     }
 
+    let geofenceSettings = null;
+    try {
+      geofenceSettings = await firebaseService.getGeofenceSettings();
+    } catch (err) {
+      console.warn('Failed to load geofence settings in getStudentMe:', err);
+    }
+
     return {
       student: studentInfo,
       currentStatus: status,
@@ -74,10 +86,14 @@ export const api = {
             timestamp: lastEvent.timestamp,
             timeFormatted: lastEvent.timeFormatted,
             location: lastEvent.location || null,
+            triggerType: lastEvent.triggerType || 'MANUAL',
+            geofenceVersion: lastEvent.geofenceVersion,
           }
         : null,
       todayEvents,
       serverTime: nowIso,
+      geofenceSettings,
+      isFirstManualInDoneToday: todayEvents.some((e) => e.action === 'IN'),
     };
   },
 
@@ -85,7 +101,10 @@ export const api = {
     action: 'IN' | 'OUT',
     location?: LocationData | null,
     studentId?: string,
-    studentName?: string
+    studentName?: string,
+    triggerType: 'MANUAL' | 'GEOFENCE_AUTO' = 'MANUAL',
+    geofenceVersion?: string,
+    dwellMinutes?: number
   ): Promise<{
     success: boolean;
     message: string;
@@ -111,7 +130,14 @@ export const api = {
         throw new Error('A fresh GPS position is required to mark IN. Please enable location access.');
       }
 
-      const res = await firebaseService.startAttendanceSession(activeStudentId, name, location);
+      const res = await firebaseService.startAttendanceSession(
+        activeStudentId,
+        name,
+        location,
+        triggerType,
+        geofenceVersion,
+        dwellMinutes
+      );
       event = res.event;
       session = res.session;
       newStatus = 'INSIDE';
@@ -120,11 +146,24 @@ export const api = {
       const currentActiveSession = await firebaseService.getActiveSession(activeStudentId);
       if (!currentActiveSession) {
         // Fallback to legacy recordAttendance if no active session doc was found
-        const res = await firebaseService.recordAttendance(activeStudentId, name, 'OUT', location);
+        const res = await firebaseService.recordAttendance(
+          activeStudentId,
+          name,
+          'OUT',
+          location,
+          triggerType,
+          geofenceVersion
+        );
         event = res.event;
         newStatus = 'OUTSIDE';
       } else {
-        const res = await firebaseService.endAttendanceSession(activeStudentId, currentActiveSession.id, location);
+        const res = await firebaseService.endAttendanceSession(
+          activeStudentId,
+          currentActiveSession.id,
+          location,
+          triggerType,
+          geofenceVersion
+        );
         event = res.event;
         session = res.session;
         newStatus = 'OUTSIDE';
@@ -137,7 +176,7 @@ export const api = {
 
     return {
       success: true,
-      message: `Successfully marked ${action} at ${event.timeFormatted}.`,
+      message: `Successfully marked ${action} at ${event.timeFormatted}${triggerType === 'GEOFENCE_AUTO' ? ' (Automatic Geofence)' : ''}.`,
       currentStatus: newStatus,
       session,
       event,
@@ -234,9 +273,10 @@ export const api = {
   async registerStudent(
     firstName: string,
     lastName: string,
-    password: string
+    password: string,
+    dateOfJoining?: string
   ): Promise<{ success: boolean; message: string; student: StudentInfo }> {
-    const student = await firebaseService.addStudent(firstName, lastName, password);
+    const student = await firebaseService.addStudent(firstName, lastName, password, dateOfJoining);
     return {
       success: true,
       message: `Student "${student.fullName}" added successfully.`,
@@ -280,5 +320,69 @@ export const api = {
 
   async getStudentHistory(studentId: string): Promise<StudentHistoryResponse> {
     return firebaseService.getStudentFullHistory(studentId);
+  },
+
+  // Geofence & Location Settings
+  async getGeofenceSettings(): Promise<GeofenceSettings> {
+    return firebaseService.getGeofenceSettings();
+  },
+
+  async saveGeofenceSettings(settings: {
+    latitude: number;
+    longitude: number;
+    radiusMeters: number;
+    enabled: boolean;
+    address?: string;
+  }): Promise<GeofenceSettings> {
+    return firebaseService.saveGeofenceSettings(settings);
+  },
+
+  subscribeToGeofenceSettings(callback: (settings: GeofenceSettings) => void): () => void {
+    return firebaseService.subscribeToGeofenceSettings(callback);
+  },
+
+  // Notification Operations
+  subscribeNotifications(
+    studentId: string | null,
+    isAdmin: boolean,
+    callback: (notifications: NotificationItem[]) => void
+  ): () => void {
+    return firebaseService.subscribeNotifications(studentId, isAdmin, callback);
+  },
+
+  async sendNotification(params: {
+    recipientType: 'ALL' | 'STUDENT' | 'ADMIN';
+    recipientStudentId?: string | null;
+    recipientStudentName?: string | null;
+    title: string;
+    message: string;
+    category: NotificationCategory;
+    priority?: NotificationPriority;
+    createdBy?: string;
+  }): Promise<NotificationItem> {
+    return firebaseService.createNotification(params);
+  },
+
+  async markNotificationAsRead(id: string): Promise<void> {
+    return firebaseService.markNotificationAsRead(id);
+  },
+
+  async markAllNotificationsAsRead(
+    recipientType: 'ADMIN' | 'STUDENT',
+    studentId?: string
+  ): Promise<void> {
+    return firebaseService.markAllNotificationsAsRead(recipientType, studentId);
+  },
+
+  async checkMembershipMonthCompletions(): Promise<void> {
+    return firebaseService.checkMembershipMonthCompletions();
+  },
+
+  async syncOfflineEvent(event: OfflineAttendanceEvent): Promise<boolean> {
+    return firebaseService.syncOfflineEvent(event);
+  },
+
+  async getStudentProfileDetails(studentId: string) {
+    return firebaseService.getStudentProfileDetails(studentId);
   },
 };

@@ -12,12 +12,13 @@ import {
   Eye,
 } from 'lucide-react';
 import { api } from '../services/api';
-import type { AttendanceSession, SessionLocationPoint } from '../types';
+import type { AttendanceSession, SessionLocationPoint, GeofenceSettings } from '../types';
 
 export function AdminLiveMapView() {
   const [activeSessions, setActiveSessions] = useState<AttendanceSession[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string>('');
   const [sessionRoutes, setSessionRoutes] = useState<Record<string, SessionLocationPoint[]>>({});
+  const [geofence, setGeofence] = useState<GeofenceSettings | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [autoFollow, setAutoFollow] = useState<boolean>(true);
 
@@ -26,8 +27,9 @@ export function AdminLiveMapView() {
   const markersRef = useRef<Map<string, L.Marker>>(new Map());
   const circlesRef = useRef<Map<string, L.Circle>>(new Map());
   const polylinesRef = useRef<Map<string, L.Polyline>>(new Map());
+  const geofenceCircleRef = useRef<L.Circle | null>(null);
 
-  // 1. Subscribe to active live sessions in real time via Firestore
+  // 1. Subscribe to active live sessions & geofence settings in real time via Firestore
   useEffect(() => {
     setIsLoading(true);
     const unsub = api.subscribeToActiveLiveSessions((sessions) => {
@@ -39,7 +41,14 @@ export function AdminLiveMapView() {
       }
     });
 
-    return () => unsub();
+    const unsubGeo = api.subscribeToGeofenceSettings((settings) => {
+      setGeofence(settings);
+    });
+
+    return () => {
+      unsub();
+      unsubGeo();
+    };
   }, [selectedSessionId]);
 
   // 2. Subscribe to route waypoints for each active session
@@ -118,6 +127,31 @@ export function AdminLiveMapView() {
         polylinesRef.current.delete(id);
       }
     });
+
+    // Render/update Geofence Circle on Live Map
+    if (geofence) {
+      if (!geofenceCircleRef.current) {
+        geofenceCircleRef.current = L.circle([geofence.latitude, geofence.longitude], {
+          radius: geofence.radiusMeters,
+          color: geofence.enabled ? '#d97706' : '#6b7280',
+          fillColor: geofence.enabled ? '#f59e0b' : '#9ca3af',
+          fillOpacity: 0.12,
+          weight: 2,
+          dashArray: geofence.enabled ? undefined : '5, 5',
+        }).addTo(map);
+        geofenceCircleRef.current.bindPopup(
+          `<strong>Official Geofence</strong><br/>Radius: ${geofence.radiusMeters}m<br/>Status: ${geofence.enabled ? '🟢 Active' : '⚪ Disabled'}`
+        );
+      } else {
+        geofenceCircleRef.current.setLatLng([geofence.latitude, geofence.longitude]);
+        geofenceCircleRef.current.setRadius(geofence.radiusMeters);
+        geofenceCircleRef.current.setStyle({
+          color: geofence.enabled ? '#d97706' : '#6b7280',
+          fillColor: geofence.enabled ? '#f59e0b' : '#9ca3af',
+          dashArray: geofence.enabled ? undefined : '5, 5',
+        });
+      }
+    }
 
     if (activeSessions.length === 0) return;
 

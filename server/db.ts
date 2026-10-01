@@ -58,6 +58,18 @@ db.exec(`
     FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
   );
 
+  CREATE TABLE IF NOT EXISTS geofence_settings (
+    id TEXT PRIMARY KEY,
+    latitude REAL NOT NULL,
+    longitude REAL NOT NULL,
+    radius_meters REAL NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    version TEXT NOT NULL,
+    address TEXT,
+    updated_at TEXT NOT NULL,
+    updated_by TEXT NOT NULL
+  );
+
   CREATE INDEX IF NOT EXISTS idx_students_normalized ON students(normalized_name);
   CREATE INDEX IF NOT EXISTS idx_events_date ON attendance_events(date_key);
   CREATE INDEX IF NOT EXISTS idx_events_student ON attendance_events(student_id);
@@ -65,7 +77,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_events_timestamp ON attendance_events(timestamp);
 `);
 
-// Migrations: ensure status, password_hash, and location columns exist if created in older versions
+// Migrations: ensure status, password_hash, location, and geofence columns exist
 try {
   const stuInfo = db.prepare('PRAGMA table_info(students)').all() as unknown as Array<{ name: string }>;
   if (!stuInfo.some((col) => col.name === 'status')) {
@@ -84,6 +96,15 @@ try {
   }
   if (!evtInfo.some((col) => col.name === 'accuracy')) {
     db.exec(`ALTER TABLE attendance_events ADD COLUMN accuracy REAL;`);
+  }
+  if (!evtInfo.some((col) => col.name === 'trigger_type')) {
+    db.exec(`ALTER TABLE attendance_events ADD COLUMN trigger_type TEXT DEFAULT 'MANUAL';`);
+  }
+  if (!evtInfo.some((col) => col.name === 'geofence_version')) {
+    db.exec(`ALTER TABLE attendance_events ADD COLUMN geofence_version TEXT;`);
+  }
+  if (!evtInfo.some((col) => col.name === 'dwell_minutes')) {
+    db.exec(`ALTER TABLE attendance_events ADD COLUMN dwell_minutes REAL;`);
   }
 } catch {
   // Columns already exist
@@ -861,7 +882,101 @@ export function deleteAdminSession(token: string): void {
  * Seed initial sample records for demonstration and date-switching testing.
  */
 export function seedInitialDataIfNeeded() {
-  // Demo and hard-coded students completely removed.
-  // Database starts with 0 students unless added by an Admin.
+  // Ensure default geofence configuration exists
+  try {
+    const existing = db.prepare('SELECT id FROM geofence_settings WHERE id = ?').get('library');
+    if (!existing) {
+      db.prepare(`
+        INSERT INTO geofence_settings (id, latitude, longitude, radius_meters, enabled, version, address, updated_at, updated_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        'library',
+        33.7782,
+        75.1495,
+        100,
+        1,
+        'v1',
+        'Digital Library Campus, Main Block',
+        new Date().toISOString(),
+        'Admin'
+      );
+    }
+  } catch (err) {
+    console.error('Error seeding geofence settings:', err);
+  }
+}
+
+export function getGeofenceSettingsFromDb() {
+  const row = db.prepare('SELECT * FROM geofence_settings WHERE id = ?').get('library') as any;
+  if (!row) {
+    return {
+      id: 'library',
+      latitude: 33.7782,
+      longitude: 75.1495,
+      radiusMeters: 100,
+      enabled: true,
+      version: 'v1',
+      address: 'Digital Library Campus, Main Block',
+      updatedAt: new Date().toISOString(),
+      updatedBy: 'Admin',
+    };
+  }
+  return {
+    id: row.id,
+    latitude: Number(row.latitude),
+    longitude: Number(row.longitude),
+    radiusMeters: Number(row.radius_meters),
+    enabled: Boolean(row.enabled),
+    version: row.version,
+    address: row.address || '',
+    updatedAt: row.updated_at,
+    updatedBy: row.updated_by || 'Admin',
+  };
+}
+
+export function saveGeofenceSettingsInDb(settings: {
+  latitude: number;
+  longitude: number;
+  radiusMeters: number;
+  enabled: boolean;
+  address?: string;
+}) {
+  const version = `v_${Date.now()}`;
+  const now = new Date().toISOString();
+  db.prepare(`
+    INSERT INTO geofence_settings (id, latitude, longitude, radius_meters, enabled, version, address, updated_at, updated_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      latitude = excluded.latitude,
+      longitude = excluded.longitude,
+      radius_meters = excluded.radius_meters,
+      enabled = excluded.enabled,
+      version = excluded.version,
+      address = excluded.address,
+      updated_at = excluded.updated_at,
+      updated_by = excluded.updated_by
+  `).run(
+    'library',
+    Number(settings.latitude),
+    Number(settings.longitude),
+    Number(settings.radiusMeters),
+    settings.enabled ? 1 : 0,
+    version,
+    settings.address || 'Digital Library Campus',
+    now,
+    'Admin'
+  );
+
+  return {
+    id: 'library',
+    latitude: Number(settings.latitude),
+    longitude: Number(settings.longitude),
+    radiusMeters: Number(settings.radiusMeters),
+    enabled: Boolean(settings.enabled),
+    version,
+    address: settings.address || '',
+    updatedAt: now,
+    updatedBy: 'Admin',
+  };
 }
 
