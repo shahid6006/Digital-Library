@@ -16,6 +16,7 @@ import {
   MapPin,
   Map,
   Bell,
+  Armchair,
 } from 'lucide-react';
 import { api } from '../services/api';
 import type { AdminAttendanceReport, ActivityEvent } from '../types';
@@ -140,7 +141,13 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
       list = list.filter((s) => s.dailyStatus === 'OUTSIDE');
     }
 
-    return list;
+    // Requirements 6 & 7: ALWAYS sort attendance list numerically by Seat Number in ascending order
+    return [...list].sort((a, b) => {
+      const seatA = typeof a.seatNumber === 'number' && !isNaN(a.seatNumber) ? a.seatNumber : 999999;
+      const seatB = typeof b.seatNumber === 'number' && !isNaN(b.seatNumber) ? b.seatNumber : 999999;
+      if (seatA !== seatB) return seatA - seatB;
+      return a.fullName.localeCompare(b.fullName);
+    });
   }, [report, searchQuery, statusFilter]);
 
   const handlePrevDay = () => {
@@ -160,6 +167,7 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
     if (!report || report.students.length === 0) return;
 
     const headers = [
+      'Seat No.',
       'Student ID',
       'Student Name',
       'Status',
@@ -183,6 +191,7 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
       const last = s.lastAction ? `${s.lastAction.action} (${s.lastAction.timeFormatted})` : 'N/A';
       const locCount = s.events.filter((e) => e.location != null).length;
       return [
+        `"${s.seatNumber != null ? s.seatNumber : 'Unassigned'}"`,
         `"${s.studentId}"`,
         `"${s.fullName}"`,
         `"${s.dailyStatus}"`,
@@ -620,6 +629,7 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
                 <table className="w-full text-left text-sm border-collapse">
                   <thead>
                     <tr className="border-b border-stone-200 bg-stone-50/70 text-[11px] font-semibold uppercase tracking-wider text-stone-600">
+                      <th className="py-3.5 px-6">Seat No.</th>
                       <th className="py-3.5 px-6">Student</th>
                       <th className="py-3.5 px-6">Status</th>
                       <th className="py-3.5 px-6">Today&apos;s Activity &amp; GPS Map</th>
@@ -637,6 +647,18 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
                           key={student.studentId}
                           className="hover:bg-stone-50/80 transition-colors group"
                         >
+                          {/* Seat No. (Requirement 6 & 7) */}
+                          <td className="py-4 px-6 align-middle font-mono">
+                            {student.seatNumber != null ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-bold bg-amber-100/90 text-amber-950 border border-amber-300 shadow-2xs">
+                                <Armchair className="w-3.5 h-3.5 text-amber-700" />
+                                <span>Seat #{student.seatNumber}</span>
+                              </span>
+                            ) : (
+                              <span className="text-xs text-stone-400 italic font-mono">Unassigned</span>
+                            )}
+                          </td>
+
                           {/* Student info */}
                           <td className="py-4 px-6 align-middle">
                             <div className="flex items-center gap-3">

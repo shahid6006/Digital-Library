@@ -12,6 +12,7 @@ import {
   Layers,
   MapPin,
   RefreshCw,
+  Armchair,
 } from 'lucide-react';
 import { api } from '../services/api';
 import type { StudentInfo } from '../types';
@@ -102,7 +103,14 @@ export function StudentProfileModal({ student, isOpen, onClose }: StudentProfile
                 <div className="text-[11px] font-bold uppercase tracking-wider text-stone-400">
                   Account Status
                 </div>
-                <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  <div className="p-2.5 bg-amber-50 rounded-xl border border-amber-200">
+                    <span className="text-stone-500 block text-[10px] font-semibold uppercase">Assigned Seat</span>
+                    <span className="font-bold text-amber-950 flex items-center gap-1 mt-0.5">
+                      <Armchair className="w-3.5 h-3.5 text-amber-700" />
+                      <span>{profile?.personal.seatNumber != null ? `Seat #${profile.personal.seatNumber}` : 'Unassigned'}</span>
+                    </span>
+                  </div>
                   <div className="p-2.5 bg-stone-50 rounded-xl border border-stone-200/70">
                     <span className="text-stone-400 block text-[10px]">Status</span>
                     <span className="font-semibold text-emerald-700 flex items-center gap-1 mt-0.5">

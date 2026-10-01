@@ -143,26 +143,10 @@ class NotificationService {
     this.resetDwellNotification();
 
     const title = action === 'IN' ? 'Library Entry Recorded' : 'Library Exit Recorded';
-    let body = '';
-    if (action === 'IN') {
-      body =
-        triggerType === 'GEOFENCE_AUTO'
-          ? timeFormatted
-            ? `You have been automatically marked IN at ${timeFormatted} after staying inside the attendance area.`
-            : 'You have been automatically marked IN after staying inside the attendance area.'
-          : timeFormatted
-          ? `You have been marked IN at ${timeFormatted}.`
-          : 'You have been marked IN.';
-    } else {
-      body =
-        triggerType === 'GEOFENCE_AUTO'
-          ? timeFormatted
-            ? `You have been automatically marked OUT at ${timeFormatted} after leaving the attendance area.`
-            : 'You have been automatically marked OUT after leaving the attendance area.'
-          : timeFormatted
-          ? `You have been marked OUT at ${timeFormatted}.`
-          : 'You have been marked OUT.';
-    }
+    const body =
+      action === 'IN'
+        ? 'Library Entry Recorded — You are now marked IN at the library.'
+        : 'Library Exit Recorded — You have been marked OUT of the library.';
 
     this.triggerNativeNotification(title, {
       body,

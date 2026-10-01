@@ -9,6 +9,7 @@ export interface StudentInfo {
   firstName: string;
   lastName: string;
   fullName: string;
+  seatNumber?: number | null;
   status?: 'active' | 'inactive';
   createdAt?: string;
   dateOfJoining?: string; // YYYY-MM-DD
@@ -18,6 +19,7 @@ export interface ActivityEvent {
   id: string;
   studentId?: string;
   studentName?: string;
+  seatNumberSnapshot?: number | null;
   action: 'IN' | 'OUT';
   timestamp: string;
   timeFormatted: string;
@@ -42,6 +44,8 @@ export interface AttendanceSession {
   id: string;
   studentId: string;
   studentName: string;
+  studentNameSnapshot?: string;
+  seatNumberSnapshot?: number | null;
   dateKey: string;
   inTimestamp: string;
   outTimestamp?: string | null;
@@ -132,6 +136,7 @@ export interface StudentDayRow {
   firstName: string;
   lastName: string;
   fullName: string;
+  seatNumber?: number | null;
   studentStatus: 'active' | 'inactive';
   dailyStatus: 'INSIDE' | 'OUTSIDE' | 'ABSENT';
   isPresent: boolean;
@@ -181,6 +186,7 @@ export interface RegisteredStudentItem {
   firstName: string;
   lastName: string;
   fullName: string;
+  seatNumber?: number | null;
   status: 'active' | 'inactive';
   createdAt: string;
   dateOfJoining?: string;
@@ -226,6 +232,7 @@ export interface OfflineAttendanceEvent {
   localId: string;
   studentId: string;
   studentName: string;
+  seatNumber?: number | null;
   action: 'IN' | 'OUT';
   timestamp: string;
   timeFormatted: string;

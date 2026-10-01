@@ -13,6 +13,8 @@ import {
   AlertTriangle,
   X,
   EyeOff,
+  Armchair,
+  Edit3,
 } from 'lucide-react';
 import { api } from '../services/api';
 import type { RegisteredStudentItem } from '../types';
@@ -33,9 +35,16 @@ export function StudentManagement() {
   const [password, setPassword] = useState<string>('');
   const [confirmPassword, setConfirmPassword] = useState<string>('');
   const [dateOfJoining, setDateOfJoining] = useState<string>('');
+  const [seatNumber, setSeatNumber] = useState<string>('');
   const [showFormPassword, setShowFormPassword] = useState<boolean>(false);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [formFeedback, setFormFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  // Edit seat number modal state
+  const [editingSeatStudent, setEditingSeatStudent] = useState<RegisteredStudentItem | null>(null);
+  const [newSeatNumberInput, setNewSeatNumberInput] = useState<string>('');
+  const [isUpdatingSeat, setIsUpdatingSeat] = useState<boolean>(false);
+  const [seatUpdateFeedback, setSeatUpdateFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   // Student Profile modal state
   const [selectedStudentForProfile, setSelectedStudentForProfile] = useState<string | null>(null);
@@ -114,18 +123,30 @@ export function StudentManagement() {
       return;
     }
 
+    if (!seatNumber || String(seatNumber).trim() === '') {
+      setFormFeedback({ type: 'error', message: 'Please enter a Seat Number.' });
+      return;
+    }
+
+    const parsedSeat = Number(seatNumber);
+    if (!Number.isInteger(parsedSeat) || parsedSeat <= 0) {
+      setFormFeedback({ type: 'error', message: 'Seat number must be a positive whole number (e.g. 1, 2, 10).' });
+      return;
+    }
+
     setIsSubmitting(true);
     try {
-      const res = await api.registerStudent(cleanFirst, cleanLast, password, dateOfJoining);
+      const res = await api.registerStudent(cleanFirst, cleanLast, password, dateOfJoining, parsedSeat);
       setFormFeedback({
         type: 'success',
-        message: res.message || `Student "${res.student.fullName}" registered successfully.`,
+        message: res.message || `Student "${res.student.fullName}" registered successfully (Seat #${parsedSeat}).`,
       });
       setFirstName('');
       setLastName('');
       setPassword('');
       setConfirmPassword('');
       setDateOfJoining('');
+      setSeatNumber('');
       loadStudents();
     } catch (err: any) {
       setFormFeedback({
@@ -134,6 +155,41 @@ export function StudentManagement() {
       });
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleUpdateSeatSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!editingSeatStudent) return;
+    setSeatUpdateFeedback(null);
+
+    const parsedSeat = Number(newSeatNumberInput);
+    if (!Number.isInteger(parsedSeat) || parsedSeat <= 0) {
+      setSeatUpdateFeedback({
+        type: 'error',
+        message: 'Seat number must be a positive whole number (e.g. 1, 2, 10).',
+      });
+      return;
+    }
+
+    setIsUpdatingSeat(true);
+    try {
+      const res = await api.updateStudentSeatNumber(editingSeatStudent.id, parsedSeat);
+      setSeatUpdateFeedback({ type: 'success', message: res.message });
+      setActionSuccessBanner(`Seat number updated for ${editingSeatStudent.fullName}: #${parsedSeat}`);
+      setTimeout(() => setActionSuccessBanner(null), 4000);
+      setTimeout(() => {
+        setEditingSeatStudent(null);
+        setSeatUpdateFeedback(null);
+      }, 1000);
+      loadStudents();
+    } catch (err: any) {
+      setSeatUpdateFeedback({
+        type: 'error',
+        message: err.message || 'Failed to update seat number.',
+      });
+    } finally {
+      setIsUpdatingSeat(false);
     }
   };
 
@@ -229,7 +285,15 @@ export function StudentManagement() {
       list = list.filter((s) => s.status === statusFilter);
     }
 
-    return list;
+    // Requirements 5 & 7: Sort students numerically by Seat Number in ascending order
+    return [...list].sort((a, b) => {
+      const seatA = typeof a.seatNumber === 'number' && !isNaN(a.seatNumber) ? a.seatNumber : 999999;
+      const seatB = typeof b.seatNumber === 'number' && !isNaN(b.seatNumber) ? b.seatNumber : 999999;
+      if (seatA !== seatB) {
+        return seatA - seatB;
+      }
+      return a.fullName.localeCompare(b.fullName);
+    });
   }, [students, searchQuery, statusFilter]);
 
   const activeCount = students.filter((s) => s.status === 'active').length;
@@ -408,25 +472,52 @@ export function StudentManagement() {
               </div>
             </div>
 
-            <div>
-              <label
-                htmlFor="addDateOfJoining"
-                className="block text-xs font-semibold uppercase tracking-wider text-stone-700 mb-1"
-              >
-                Date of Joining (Required for Monthly Membership)
-              </label>
-              <input
-                id="addDateOfJoining"
-                type="date"
-                required
-                value={dateOfJoining}
-                onChange={(e) => setDateOfJoining(e.target.value)}
-                className="w-full max-w-sm px-3 py-2 bg-stone-50 border border-stone-300 rounded-lg text-sm text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:bg-white transition"
-                disabled={isSubmitting}
-              />
-              <p className="text-[11px] text-stone-400 mt-1">
-                Select the official library registration date using the date picker.
-              </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label
+                  htmlFor="addDateOfJoining"
+                  className="block text-xs font-semibold uppercase tracking-wider text-stone-700 mb-1"
+                >
+                  Date of Joining (Required)
+                </label>
+                <input
+                  id="addDateOfJoining"
+                  type="date"
+                  required
+                  value={dateOfJoining}
+                  onChange={(e) => setDateOfJoining(e.target.value)}
+                  className="w-full px-3 py-2 bg-stone-50 border border-stone-300 rounded-lg text-sm text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:bg-white transition"
+                  disabled={isSubmitting}
+                />
+                <p className="text-[11px] text-stone-400 mt-1">
+                  Official library registration date.
+                </p>
+              </div>
+
+              <div>
+                <label
+                  htmlFor="addSeatNumber"
+                  className="block text-xs font-semibold uppercase tracking-wider text-stone-700 mb-1 flex items-center gap-1.5"
+                >
+                  <Armchair className="w-3.5 h-3.5 text-amber-700" />
+                  <span>Seat Number (Required)</span>
+                </label>
+                <input
+                  id="addSeatNumber"
+                  type="number"
+                  min="1"
+                  step="1"
+                  required
+                  value={seatNumber}
+                  onChange={(e) => setSeatNumber(e.target.value)}
+                  placeholder="e.g. 1, 2, 10, 25"
+                  className="w-full px-3 py-2 bg-stone-50 border border-stone-300 rounded-lg text-sm text-stone-900 placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:bg-white transition font-mono"
+                  disabled={isSubmitting}
+                />
+                <p className="text-[11px] text-stone-400 mt-1">
+                  Positive whole number only. Must be unique for active students.
+                </p>
+              </div>
             </div>
 
             <div className="flex items-center gap-3 pt-1">
@@ -570,6 +661,7 @@ export function StudentManagement() {
             <table className="w-full text-left text-sm border-collapse">
               <thead>
                 <tr className="border-b border-stone-200 bg-stone-50/70 text-[11px] font-semibold uppercase tracking-wider text-stone-600">
+                  <th className="py-3.5 px-6">Seat No.</th>
                   <th className="py-3.5 px-6">Student Name</th>
                   <th className="py-3.5 px-6">Status</th>
                   <th className="py-3.5 px-6">Date of Joining</th>
@@ -587,6 +679,44 @@ export function StudentManagement() {
                       key={student.id}
                       className="hover:bg-stone-50/80 transition-colors group"
                     >
+                      {/* Seat No. */}
+                      <td className="py-4 px-6 align-middle font-mono">
+                        {student.seatNumber != null ? (
+                          <div className="flex items-center gap-1.5">
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-bold bg-amber-100/90 text-amber-950 border border-amber-300 shadow-2xs">
+                              <Armchair className="w-3.5 h-3.5 text-amber-700" />
+                              <span>#{student.seatNumber}</span>
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingSeatStudent(student);
+                                setNewSeatNumberInput(student.seatNumber != null ? String(student.seatNumber) : '');
+                                setSeatUpdateFeedback(null);
+                              }}
+                              className="p-1 text-stone-400 hover:text-amber-700 rounded transition cursor-pointer"
+                              title="Edit seat number"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingSeatStudent(student);
+                              setNewSeatNumberInput('');
+                              setSeatUpdateFeedback(null);
+                            }}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 transition cursor-pointer"
+                            title="Assign a seat number"
+                          >
+                            <Armchair className="w-3 h-3 text-amber-600" />
+                            <span className="italic">Unassigned (Click to set)</span>
+                          </button>
+                        )}
+                      </td>
+
                       {/* Student info */}
                       <td className="py-4 px-6 align-middle">
                         <div className="flex items-center gap-3">
@@ -642,6 +772,20 @@ export function StudentManagement() {
                       {/* Action buttons: View Profile | Reset Password | Deactivate/Activate | Delete */}
                       <td className="py-4 px-6 align-middle text-right">
                         <div className="inline-flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingSeatStudent(student);
+                              setNewSeatNumberInput(student.seatNumber != null ? String(student.seatNumber) : '');
+                              setSeatUpdateFeedback(null);
+                            }}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-amber-900 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-md transition cursor-pointer"
+                            title="Change assigned seat number"
+                          >
+                            <Armchair className="w-3.5 h-3.5 text-amber-700" />
+                            <span>Seat</span>
+                          </button>
+
                           <button
                             type="button"
                             onClick={() => setSelectedStudentForProfile(student.id)}
@@ -922,6 +1066,108 @@ export function StudentManagement() {
           studentId={selectedStudentForHistory}
           onClose={() => setSelectedStudentForHistory(null)}
         />
+      )}
+
+      {/* Edit Student Seat Number Modal (Requirement 5) */}
+      {editingSeatStudent && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-stone-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl border border-stone-200 shadow-xl max-w-md w-full overflow-hidden animate-fade-in">
+            <div className="px-6 py-4 border-b border-stone-200 bg-stone-50 flex items-center justify-between">
+              <div className="flex items-center gap-2 text-stone-900 font-bold text-base">
+                <Armchair className="w-5 h-5 text-amber-700" />
+                <span>Edit Student Seat Number</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingSeatStudent(null)}
+                className="text-stone-400 hover:text-stone-700 p-1 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleUpdateSeatSubmit} className="p-6 space-y-4">
+              <div className="bg-stone-50 p-3 rounded-lg border border-stone-200 text-xs text-stone-600 space-y-1">
+                <div>
+                  Student: <span className="font-semibold text-stone-900">{editingSeatStudent.fullName}</span>
+                </div>
+                <div>
+                  Current Seat:{' '}
+                  <span className="font-bold text-amber-900 font-mono">
+                    {editingSeatStudent.seatNumber != null ? `Seat #${editingSeatStudent.seatNumber}` : 'Unassigned'}
+                  </span>
+                </div>
+              </div>
+
+              {seatUpdateFeedback && (
+                <div
+                  className={`p-3 rounded-lg text-xs flex items-start gap-2 ${
+                    seatUpdateFeedback.type === 'success'
+                      ? 'bg-emerald-50 border border-emerald-200 text-emerald-800'
+                      : 'bg-rose-50 border border-rose-200 text-rose-800'
+                  }`}
+                >
+                  {seatUpdateFeedback.type === 'success' ? (
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                  ) : (
+                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                  )}
+                  <div className="font-medium">{seatUpdateFeedback.message}</div>
+                </div>
+              )}
+
+              <div>
+                <label
+                  htmlFor="newSeatInput"
+                  className="block text-xs font-semibold uppercase tracking-wider text-stone-700 mb-1"
+                >
+                  New Seat Number (Positive Whole Number)
+                </label>
+                <input
+                  id="newSeatInput"
+                  type="number"
+                  min="1"
+                  step="1"
+                  required
+                  value={newSeatNumberInput}
+                  onChange={(e) => setNewSeatNumberInput(e.target.value)}
+                  placeholder="e.g. 1, 2, 10, 25"
+                  className="w-full px-3 py-2 bg-stone-50 border border-stone-300 rounded-lg text-sm text-stone-900 placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:bg-white transition font-mono"
+                  disabled={isUpdatingSeat}
+                  autoFocus
+                />
+                <p className="text-[11px] text-stone-500 mt-1">
+                  Assigns a unique seat number to this student. Historical attendance records will remain safely linked to the student ID.
+                </p>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-stone-100">
+                <button
+                  type="button"
+                  onClick={() => setEditingSeatStudent(null)}
+                  className="px-3 py-2 text-xs font-medium text-stone-600 hover:text-stone-900 transition cursor-pointer"
+                  disabled={isUpdatingSeat}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isUpdatingSeat}
+                  className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold rounded-lg shadow-sm transition disabled:opacity-50 cursor-pointer flex items-center gap-1.5"
+                >
+                  {isUpdatingSeat ? (
+                    <>
+                      <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      <span>Saving...</span>
+                    </>
+                  ) : (
+                    <span>SAVE SEAT NUMBER</span>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
 
       {/* Admin Student Profile Modal (Feature 6) */}

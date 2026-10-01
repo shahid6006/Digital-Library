@@ -14,6 +14,7 @@ import {
   CheckCircle2,
   RefreshCw,
   AlertTriangle,
+  Armchair,
 } from 'lucide-react';
 import { api } from '../services/api';
 
@@ -191,7 +192,14 @@ export function AdminStudentProfileModal({
                 <div className="text-[11px] font-bold uppercase tracking-wider text-stone-400">
                   Personal Information
                 </div>
-                <div className="grid grid-cols-2 gap-3 text-xs">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
+                  <div className="p-3 bg-amber-50 rounded-xl border border-amber-200/80">
+                    <span className="text-amber-800 block text-[10px] font-bold uppercase tracking-wider">Assigned Seat</span>
+                    <span className="font-extrabold text-amber-950 mt-0.5 flex items-center gap-1.5 text-sm font-mono">
+                      <Armchair className="w-4 h-4 text-amber-700" />
+                      <span>{profile?.personal.seatNumber != null ? `Seat #${profile.personal.seatNumber}` : 'Unassigned'}</span>
+                    </span>
+                  </div>
                   <div className="p-3 bg-stone-50 rounded-xl border border-stone-200/70">
                     <span className="text-stone-400 block text-[10px]">First Name</span>
                     <span className="font-semibold text-stone-900 mt-0.5 block">{profile?.personal.firstName}</span>
@@ -204,7 +212,7 @@ export function AdminStudentProfileModal({
                     <span className="text-stone-400 block text-[10px]">Date of Joining</span>
                     <span className="font-bold text-amber-800 mt-0.5 block">{profile?.personal.dateOfJoining}</span>
                   </div>
-                  <div className="p-3 bg-stone-50 rounded-xl border border-stone-200/70">
+                  <div className="p-3 bg-stone-50 rounded-xl border border-stone-200/70 sm:col-span-2">
                     <span className="text-stone-400 block text-[10px]">Security</span>
                     <span className="font-medium text-stone-600 mt-0.5 block">Stored as salted argon/sha256 hash (never plaintext)</span>
                   </div>

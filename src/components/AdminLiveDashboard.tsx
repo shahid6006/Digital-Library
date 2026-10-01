@@ -9,6 +9,7 @@ import {
   Timer,
   RefreshCw,
   ExternalLink,
+  Armchair,
 } from 'lucide-react';
 import { api } from '../services/api';
 import { getTodayDateKey, formatLocalTime } from '../utils/dateUtils';
@@ -117,6 +118,15 @@ export function AdminLiveDashboard({ onSelectStudentLocation }: AdminLiveDashboa
       pending?.studentName ||
       'Unknown Student';
 
+    const seatNumber =
+      registered?.seatNumber != null
+        ? Number(registered.seatNumber)
+        : reportItem?.seatNumber != null
+        ? Number(reportItem.seatNumber)
+        : activeSess?.seatNumberSnapshot != null
+        ? Number(activeSess.seatNumberSnapshot)
+        : null;
+
     const isInside = Boolean(activeSess || reportItem?.dailyStatus === 'INSIDE');
     const status: 'INSIDE' | 'OUTSIDE' = isInside ? 'INSIDE' : 'OUTSIDE';
 
@@ -168,6 +178,7 @@ export function AdminLiveDashboard({ onSelectStudentLocation }: AdminLiveDashboa
     return {
       studentId: id,
       fullName,
+      seatNumber,
       status,
       lastLocation: lastLoc,
       lastLocationUpdate,
@@ -176,8 +187,16 @@ export function AdminLiveDashboard({ onSelectStudentLocation }: AdminLiveDashboa
       timeRemaining,
       remainingSeconds,
       events: reportItem?.events || [],
-      isRegisteredActive: registered?.active ?? true,
+      isRegisteredActive: registered ? registered.status === 'active' : true,
     };
+  });
+
+  // Requirements 6, 7 & 9: Sort all live dashboard rows numerically by Seat Number in ascending order
+  studentRows.sort((a, b) => {
+    const seatA = typeof a.seatNumber === 'number' && !isNaN(a.seatNumber) ? a.seatNumber : 999999;
+    const seatB = typeof b.seatNumber === 'number' && !isNaN(b.seatNumber) ? b.seatNumber : 999999;
+    if (seatA !== seatB) return seatA - seatB;
+    return a.fullName.localeCompare(b.fullName);
   });
 
   // Filter rows
@@ -341,6 +360,7 @@ export function AdminLiveDashboard({ onSelectStudentLocation }: AdminLiveDashboa
             <table className="w-full text-left text-sm border-collapse">
               <thead>
                 <tr className="border-b border-stone-200 bg-stone-50/70 text-[11px] font-semibold uppercase tracking-wider text-stone-600">
+                  <th className="py-3.5 px-6">Seat No.</th>
                   <th className="py-3.5 px-6">Student</th>
                   <th className="py-3.5 px-6">Current Status</th>
                   <th className="py-3.5 px-6">Current Location</th>
@@ -359,6 +379,18 @@ export function AdminLiveDashboard({ onSelectStudentLocation }: AdminLiveDashboa
                       row.pendingVerification !== '—' ? 'bg-amber-50/20' : ''
                     }`}
                   >
+                    {/* Seat No. (Requirement 6, 7 & 9) */}
+                    <td className="py-4 px-6 align-middle font-mono">
+                      {row.seatNumber != null ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-bold bg-amber-100/90 text-amber-950 border border-amber-300 shadow-2xs">
+                          <Armchair className="w-3.5 h-3.5 text-amber-700" />
+                          <span>Seat #{row.seatNumber}</span>
+                        </span>
+                      ) : (
+                        <span className="text-xs text-stone-400 italic font-mono">Unassigned</span>
+                      )}
+                    </td>
+
                     {/* Student */}
                     <td className="py-4 px-6 align-middle font-medium text-stone-900">
                       <div>

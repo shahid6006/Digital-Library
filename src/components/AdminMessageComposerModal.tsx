@@ -41,7 +41,14 @@ export function AdminMessageComposerModal({
     if (!isOpen) return;
 
     api.getRegisteredStudents().then((res) => {
-      setStudents(res.students.filter((s) => s.status === 'active'));
+      const active = res.students.filter((s) => s.status === 'active');
+      active.sort((a, b) => {
+        const seatA = typeof a.seatNumber === 'number' && !isNaN(a.seatNumber) ? a.seatNumber : 999999;
+        const seatB = typeof b.seatNumber === 'number' && !isNaN(b.seatNumber) ? b.seatNumber : 999999;
+        if (seatA !== seatB) return seatA - seatB;
+        return a.fullName.localeCompare(b.fullName);
+      });
+      setStudents(active);
     });
 
     if (preSelectedStudentId) {
@@ -236,7 +243,7 @@ export function AdminMessageComposerModal({
                 <option value="">-- Choose student --</option>
                 {students.map((s) => (
                   <option key={s.id} value={s.id}>
-                    {s.fullName} ({s.dateOfJoining ? `Joined ${s.dateOfJoining}` : 'Active'})
+                    {s.seatNumber != null ? `Seat #${s.seatNumber} • ` : ''}{s.fullName} ({s.dateOfJoining ? `Joined ${s.dateOfJoining}` : 'Active'})
                   </option>
                 ))}
               </select>
@@ -275,7 +282,14 @@ export function AdminMessageComposerModal({
                         isChecked ? 'bg-amber-50 text-amber-900 font-semibold' : 'hover:bg-stone-50'
                       }`}
                     >
-                      <span>{s.fullName}</span>
+                      <div className="flex items-center gap-1.5">
+                        {s.seatNumber != null && (
+                          <span className="px-1.5 py-0.2 bg-amber-100 text-amber-900 border border-amber-300 rounded text-[10px] font-bold font-mono">
+                            #{s.seatNumber}
+                          </span>
+                        )}
+                        <span>{s.fullName}</span>
+                      </div>
                       <input
                         type="checkbox"
                         checked={isChecked}

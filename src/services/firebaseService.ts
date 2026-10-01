@@ -268,6 +268,7 @@ export const firebaseService = {
         firstName: data.firstName,
         lastName: data.lastName,
         fullName: data.fullName,
+        seatNumber: data.seatNumber != null ? Number(data.seatNumber) : null,
         status: data.active ? 'active' : 'inactive',
         createdAt: data.createdAt,
         dateOfJoining: data.dateOfJoining || data.createdAt?.split('T')[0] || '',
@@ -335,6 +336,7 @@ export const firebaseService = {
       firstName: data.firstName,
       lastName: data.lastName,
       fullName: data.fullName,
+      seatNumber: data.seatNumber != null ? Number(data.seatNumber) : null,
       status: 'active',
       createdAt: data.createdAt,
       dateOfJoining: data.dateOfJoining || data.createdAt?.split('T')[0] || '',
@@ -496,6 +498,10 @@ export const firebaseService = {
       throw new Error('Invalid action: You are already marked INSIDE with an active attendance session.');
     }
 
+    const stuData = stuSnap.data();
+    const seatNumberSnapshot = stuData.seatNumber != null ? Number(stuData.seatNumber) : null;
+    const studentNameSnapshot = stuData.fullName || studentName;
+
     const now = new Date();
     const inTimestamp = now.toISOString();
     const dateKey = computeDateKey(inTimestamp);
@@ -506,6 +512,8 @@ export const firebaseService = {
       id: sessionId,
       studentId,
       studentName,
+      studentNameSnapshot,
+      seatNumberSnapshot,
       dateKey,
       inTimestamp,
       outTimestamp: null,
@@ -562,6 +570,8 @@ export const firebaseService = {
       id: eventId,
       studentId,
       studentName,
+      studentNameSnapshot,
+      seatNumberSnapshot,
       action: 'IN',
       triggerType,
       geofenceVersion: geofenceVersion || null,
@@ -581,6 +591,7 @@ export const firebaseService = {
       id: eventId,
       studentId,
       studentName,
+      seatNumberSnapshot,
       action: 'IN',
       triggerType,
       geofenceVersion,
@@ -592,6 +603,23 @@ export const firebaseService = {
 
     // Clean up any pending return dwell entry once officially marked IN
     this.deletePendingGeofenceEntry(studentId).catch(() => {});
+
+    // Dispatch Admin Notification for attendance entry (Feature 2 & 14)
+    const isFirstManual = triggerType === 'MANUAL';
+    const seatLabel = seatNumberSnapshot ? ` (Seat #${seatNumberSnapshot})` : '';
+    this.createNotification({
+      recipientType: 'ADMIN',
+      recipientStudentId: studentId,
+      recipientStudentName: studentName,
+      title: isFirstManual ? 'First Manual IN Recorded' : 'Student Automatically Marked IN',
+      message: isFirstManual
+        ? `${studentName}${seatLabel} completed first manual IN at ${formatLocalTime(inTimestamp)}.`
+        : `${studentName}${seatLabel} was automatically marked IN at ${formatLocalTime(inTimestamp)} after staying inside library geofence.`,
+      category: 'ATTENDANCE',
+      priority: 'normal',
+      createdBy: isFirstManual ? 'Student Action' : 'Automatic Geofence',
+      metadata: { studentId, studentName, seatNumber: seatNumberSnapshot, action: 'IN', triggerType },
+    }).catch(() => {});
 
     return {
       session: sessionPayload,
@@ -739,10 +767,15 @@ export const firebaseService = {
     }
 
     // Record OUT event in attendanceEvents
+    const seatNumberSnapshot = currentData.seatNumberSnapshot ?? null;
+    const studentNameSnapshot = currentData.studentNameSnapshot || currentData.studentName;
+
     const eventPayload: any = {
       id: eventId,
       studentId,
       studentName: currentData.studentName,
+      studentNameSnapshot,
+      seatNumberSnapshot,
       action: 'OUT',
       triggerType,
       geofenceVersion: geofenceVersion || currentData.geofenceVersion || null,
@@ -761,6 +794,7 @@ export const firebaseService = {
       id: eventId,
       studentId,
       studentName: currentData.studentName,
+      seatNumberSnapshot,
       action: 'OUT',
       triggerType,
       geofenceVersion: eventPayload.geofenceVersion,
@@ -768,6 +802,23 @@ export const firebaseService = {
       timeFormatted: formatLocalTime(outTimestamp),
       location: outLocObj,
     };
+
+    // Dispatch Admin Notification for exit transition (Feature 2 & 14)
+    const isAutoOut = triggerType === 'GEOFENCE_AUTO';
+    const seatLabel = seatNumberSnapshot ? ` (Seat #${seatNumberSnapshot})` : '';
+    this.createNotification({
+      recipientType: 'ADMIN',
+      recipientStudentId: studentId,
+      recipientStudentName: currentData.studentName,
+      title: isAutoOut ? 'Student Automatically Marked OUT' : 'Student Marked OUT',
+      message: isAutoOut
+        ? `${currentData.studentName}${seatLabel} was automatically marked OUT at ${formatLocalTime(outTimestamp)} after leaving the attendance area.`
+        : `${currentData.studentName}${seatLabel} marked OUT at ${formatLocalTime(outTimestamp)}.`,
+      category: 'ATTENDANCE',
+      priority: 'normal',
+      createdBy: isAutoOut ? 'Automatic Geofence' : 'Student Action',
+      metadata: { studentId, studentName: currentData.studentName, seatNumber: seatNumberSnapshot, action: 'OUT', triggerType },
+    }).catch(() => {});
 
     return {
       session: {
@@ -833,6 +884,15 @@ export const firebaseService = {
       q,
       (snap) => {
         const list = snap.docs.map((d) => d.data() as AttendanceSession);
+        // Numerically sort active sessions by seat number (Requirement 7 & 15)
+        list.sort((a, b) => {
+          const seatA = typeof a.seatNumberSnapshot === 'number' && !isNaN(a.seatNumberSnapshot) ? a.seatNumberSnapshot : 999999;
+          const seatB = typeof b.seatNumberSnapshot === 'number' && !isNaN(b.seatNumberSnapshot) ? b.seatNumberSnapshot : 999999;
+          if (seatA !== seatB) {
+            return seatA - seatB;
+          }
+          return a.studentName.localeCompare(b.studentName);
+        });
         callback(list);
       },
       (error) => {
@@ -1101,6 +1161,7 @@ export const firebaseService = {
               firstName: data.firstName,
               lastName: data.lastName,
               fullName: data.fullName,
+              seatNumber: data.seatNumber != null ? Number(data.seatNumber) : null,
               status: data.active ? 'active' : 'inactive',
               createdAt: data.createdAt,
               dateOfJoining: data.dateOfJoining || data.createdAt?.split('T')[0] || '',
@@ -1110,7 +1171,15 @@ export const firebaseService = {
           })
         );
 
-        list.sort((a, b) => a.fullName.localeCompare(b.fullName));
+        // Sort numerically by Seat Number ascending (Requirement 7 & 8)
+        list.sort((a, b) => {
+          const seatA = typeof a.seatNumber === 'number' && !isNaN(a.seatNumber) ? a.seatNumber : 999999;
+          const seatB = typeof b.seatNumber === 'number' && !isNaN(b.seatNumber) ? b.seatNumber : 999999;
+          if (seatA !== seatB) {
+            return seatA - seatB;
+          }
+          return a.fullName.localeCompare(b.fullName);
+        });
         callback(list);
       },
       (error) => {
@@ -1120,13 +1189,14 @@ export const firebaseService = {
   },
 
   /**
-   * Adds a new student into Firestore with duplicate detection and Date of Joining
+   * Adds a new student into Firestore with duplicate detection, Date of Joining, and required numeric Seat Number
    */
   async addStudent(
     firstNameRaw: string,
     lastNameRaw: string,
     passwordRaw: string,
-    dateOfJoiningRaw?: string
+    dateOfJoiningRaw?: string,
+    seatNumberRaw?: number | string
   ): Promise<StudentInfo> {
     await this.ensureAuthReady();
 
@@ -1138,6 +1208,15 @@ export const firebaseService = {
 
     if (!dateOfJoiningRaw || !dateOfJoiningRaw.trim()) {
       throw new Error('Date of Joining is required.');
+    }
+
+    if (seatNumberRaw === undefined || seatNumberRaw === null || String(seatNumberRaw).trim() === '') {
+      throw new Error('Seat number is required.');
+    }
+
+    const seatNumber = Number(seatNumberRaw);
+    if (!Number.isInteger(seatNumber) || seatNumber <= 0) {
+      throw new Error('Seat number must be a positive whole number (e.g. 1, 2, 10).');
     }
 
     const dateOfJoining = dateOfJoiningRaw.trim();
@@ -1154,6 +1233,18 @@ export const firebaseService = {
       );
     }
 
+    // Requirement 3: Check duplicate seat number among active students
+    const seatQ = query(
+      collection(db, 'students'),
+      where('active', '==', true),
+      where('seatNumber', '==', seatNumber)
+    );
+    const seatSnap = await getDocs(seatQ);
+    if (!seatSnap.empty) {
+      const existingWithSeat = seatSnap.docs[0].data();
+      throw new Error(`Seat number ${seatNumber} is already assigned to another student (${existingWithSeat.fullName}).`);
+    }
+
     const passwordHash = await hashPassword(passwordRaw);
     const studentId = `stu_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
     const now = new Date().toISOString();
@@ -1164,10 +1255,12 @@ export const firebaseService = {
       lastName,
       fullName,
       normalizedName,
+      seatNumber, // Stored as numeric Firestore field (Requirement 2 & 12)
       active: true,
       passwordHash,
       dateOfJoining,
       createdAt: now,
+      updatedAt: now,
     };
 
     try {
@@ -1177,11 +1270,11 @@ export const firebaseService = {
       this.createNotification({
         recipientType: 'ADMIN',
         title: 'New Student Added',
-        message: `New student registered: ${fullName} (Date of Joining: ${dateOfJoining}).`,
+        message: `New student registered: ${fullName} (Seat #${seatNumber}, Date of Joining: ${dateOfJoining}).`,
         category: 'STUDENTS',
         priority: 'normal',
         createdBy: 'Admin',
-        metadata: { studentId, fullName, dateOfJoining },
+        metadata: { studentId, fullName, seatNumber, dateOfJoining },
       }).catch(() => {});
     } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, 'students');
@@ -1192,9 +1285,88 @@ export const firebaseService = {
       firstName,
       lastName,
       fullName,
+      seatNumber,
       status: 'active',
       createdAt: now,
       dateOfJoining,
+    };
+  },
+
+  /**
+   * Updates or changes an assigned student seat number with validation and duplicate prevention (Requirement 5)
+   */
+  async updateStudentSeatNumber(
+    studentId: string,
+    newSeatNumberRaw: number | string
+  ): Promise<{ success: boolean; message: string; seatNumber: number }> {
+    await this.ensureAuthReady();
+
+    if (newSeatNumberRaw === undefined || newSeatNumberRaw === null || String(newSeatNumberRaw).trim() === '') {
+      throw new Error('Seat number is required.');
+    }
+
+    const newSeatNumber = Number(newSeatNumberRaw);
+    if (!Number.isInteger(newSeatNumber) || newSeatNumber <= 0) {
+      throw new Error('Seat number must be a positive whole number (e.g. 1, 2, 10).');
+    }
+
+    const stuRef = doc(db, 'students', studentId);
+    const stuSnap = await getDoc(stuRef);
+    if (!stuSnap.exists()) {
+      throw new Error('Student account not found.');
+    }
+
+    const currentData = stuSnap.data();
+    const oldSeatNumber = currentData.seatNumber ?? null;
+
+    if (oldSeatNumber === newSeatNumber) {
+      return {
+        success: true,
+        message: `Student is already assigned to Seat #${newSeatNumber}.`,
+        seatNumber: newSeatNumber,
+      };
+    }
+
+    // Check duplicate seat number among active students
+    const seatQ = query(
+      collection(db, 'students'),
+      where('active', '==', true),
+      where('seatNumber', '==', newSeatNumber)
+    );
+    const seatSnap = await getDocs(seatQ);
+    const conflicts = seatSnap.docs.filter((d) => d.id !== studentId);
+    if (conflicts.length > 0) {
+      const conflictName = conflicts[0].data().fullName || 'another student';
+      throw new Error(`Seat number ${newSeatNumber} is already assigned to another student (${conflictName}).`);
+    }
+
+    const now = new Date().toISOString();
+    try {
+      await updateDoc(stuRef, {
+        seatNumber: newSeatNumber,
+        updatedAt: now,
+      });
+
+      // Notify Admin of Seat Assignment Change (Feature 2 & 14)
+      this.createNotification({
+        recipientType: 'ADMIN',
+        recipientStudentId: studentId,
+        recipientStudentName: currentData.fullName,
+        title: 'Seat Number Changed',
+        message: `Seat number updated for ${currentData.fullName}: ${oldSeatNumber != null ? `Seat #${oldSeatNumber}` : 'Unassigned'} → Seat #${newSeatNumber}.`,
+        category: 'STUDENTS',
+        priority: 'normal',
+        createdBy: 'Admin Action',
+        metadata: { studentId, studentName: currentData.fullName, oldSeat: oldSeatNumber, newSeat: newSeatNumber },
+      }).catch(() => {});
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `students/${studentId}`);
+    }
+
+    return {
+      success: true,
+      message: `Seat number for ${currentData.fullName} successfully updated to #${newSeatNumber}.`,
+      seatNumber: newSeatNumber,
     };
   },
 
@@ -1203,6 +1375,14 @@ export const firebaseService = {
    */
   async deleteStudent(studentId: string): Promise<void> {
     await this.ensureAuthReady();
+
+    let stuName = 'Student';
+    try {
+      const snap = await getDoc(doc(db, 'students', studentId));
+      if (snap.exists()) {
+        stuName = snap.data().fullName || 'Student';
+      }
+    } catch {}
 
     try {
       // 1. Delete all attendance events belonging to this student
@@ -1229,6 +1409,19 @@ export const firebaseService = {
 
       // 3. Delete the student document
       await deleteDoc(doc(db, 'students', studentId));
+
+      // 4. Notify Admin (Feature 2)
+      this.createNotification({
+        recipientType: 'ADMIN',
+        recipientStudentId: studentId,
+        recipientStudentName: stuName,
+        title: 'Student Account Deleted',
+        message: `Student "${stuName}" and all associated attendance records were permanently deleted.`,
+        category: 'STUDENTS',
+        priority: 'important',
+        createdBy: 'Admin Action',
+        metadata: { studentId, studentName: stuName },
+      }).catch(() => {});
     } catch (err) {
       handleFirestoreError(err, OperationType.DELETE, `students/${studentId}`);
     }
@@ -1240,12 +1433,53 @@ export const firebaseService = {
   async updateStudentStatus(studentId: string, status: 'active' | 'inactive'): Promise<void> {
     await this.ensureAuthReady();
 
+    let stuName = 'Student';
     try {
       const stuRef = doc(db, 'students', studentId);
+      const stuSnap = await getDoc(stuRef);
+      if (!stuSnap.exists()) {
+        throw new Error('Student account not found.');
+      }
+      const stuData = stuSnap.data();
+      stuName = stuData.fullName || 'Student';
+
+      // Requirement 3: If reactivating, verify that the student's seat number is not held by another active student
+      if (status === 'active' && stuData.seatNumber != null) {
+        const seatQ = query(
+          collection(db, 'students'),
+          where('active', '==', true),
+          where('seatNumber', '==', stuData.seatNumber)
+        );
+        const seatSnap = await getDocs(seatQ);
+        const conflicts = seatSnap.docs.filter((d) => d.id !== studentId);
+        if (conflicts.length > 0) {
+          const conflictName = conflicts[0].data().fullName || 'another student';
+          throw new Error(
+            `Seat number ${stuData.seatNumber} is already assigned to another student (${conflictName}). Please assign a new seat number before reactivating.`
+          );
+        }
+      }
+
       await updateDoc(stuRef, {
         active: status === 'active',
       });
+
+      // Notify Admin (Feature 2)
+      this.createNotification({
+        recipientType: 'ADMIN',
+        recipientStudentId: studentId,
+        recipientStudentName: stuName,
+        title: status === 'active' ? 'Student Account Reactivated' : 'Student Account Deactivated',
+        message: `Student account "${stuName}" has been ${status === 'active' ? 'reactivated' : 'deactivated'}.`,
+        category: 'STUDENTS',
+        priority: 'normal',
+        createdBy: 'Admin Action',
+        metadata: { studentId, studentName: stuName, status },
+      }).catch(() => {});
     } catch (err) {
+      if (err instanceof Error && err.message.startsWith('Seat number')) {
+        throw err;
+      }
       handleFirestoreError(err, OperationType.UPDATE, `students/${studentId}`);
     }
   },
@@ -1421,6 +1655,7 @@ export const firebaseService = {
                 firstName: s.firstName,
                 lastName: s.lastName,
                 fullName: s.fullName,
+                seatNumber: s.seatNumber != null ? Number(s.seatNumber) : null,
                 studentStatus: s.active ? 'active' : 'inactive',
                 dailyStatus,
                 isPresent,
@@ -1433,11 +1668,13 @@ export const firebaseService = {
               });
             }
 
+            // Requirement 7 & 8: Attendance list MUST always be sorted numerically by Seat Number in ascending order
             studentRows.sort((a, b) => {
-              if (a.dailyStatus === 'INSIDE' && b.dailyStatus !== 'INSIDE') return -1;
-              if (b.dailyStatus === 'INSIDE' && a.dailyStatus !== 'INSIDE') return 1;
-              if (a.dailyStatus === 'OUTSIDE' && b.dailyStatus === 'ABSENT') return -1;
-              if (b.dailyStatus === 'OUTSIDE' && a.dailyStatus === 'ABSENT') return 1;
+              const seatA = typeof a.seatNumber === 'number' && !isNaN(a.seatNumber) ? a.seatNumber : 999999;
+              const seatB = typeof b.seatNumber === 'number' && !isNaN(b.seatNumber) ? b.seatNumber : 999999;
+              if (seatA !== seatB) {
+                return seatA - seatB;
+              }
               return a.fullName.localeCompare(b.fullName);
             });
 
@@ -1645,6 +1882,18 @@ export const firebaseService = {
     try {
       const docRef = doc(db, 'geofenceSettings', 'library');
       await setDoc(docRef, payload);
+
+      // Dispatch Admin Notification (Feature 2)
+      this.createNotification({
+        recipientType: 'ADMIN',
+        title: 'Geofence Settings Changed',
+        message: `Library geofence radius updated to ${payload.radiusMeters}m (${payload.enabled ? 'Enabled' : 'Disabled'}).`,
+        category: 'SYSTEM',
+        priority: 'normal',
+        createdBy: 'Admin Action',
+        metadata: { geofenceId: 'library', radiusMeters: payload.radiusMeters, enabled: payload.enabled },
+      }).catch(() => {});
+
       return payload;
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, 'geofenceSettings/library');
@@ -2051,6 +2300,7 @@ export const firebaseService = {
       firstName: string;
       lastName: string;
       fullName: string;
+      seatNumber?: number | null;
       dateOfJoining: string;
       accountStatus: 'active' | 'inactive';
       createdAt: string;
@@ -2169,6 +2419,7 @@ export const firebaseService = {
         firstName: stu.firstName,
         lastName: stu.lastName,
         fullName: stu.fullName,
+        seatNumber: stu.seatNumber != null ? Number(stu.seatNumber) : null,
         dateOfJoining,
         accountStatus: stu.active ? 'active' : 'inactive',
         createdAt: stu.createdAt,

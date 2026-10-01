@@ -338,11 +338,18 @@ export function LocationHistoryView() {
               {students.length === 0 ? (
                 <option value="">No registered students found</option>
               ) : (
-                students.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.fullName} ({s.status === 'active' ? 'Active' : 'Inactive'})
-                  </option>
-                ))
+                [...students]
+                  .sort((a, b) => {
+                    const seatA = typeof a.seatNumber === 'number' && !isNaN(a.seatNumber) ? a.seatNumber : 999999;
+                    const seatB = typeof b.seatNumber === 'number' && !isNaN(b.seatNumber) ? b.seatNumber : 999999;
+                    if (seatA !== seatB) return seatA - seatB;
+                    return a.fullName.localeCompare(b.fullName);
+                  })
+                  .map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.seatNumber != null ? `Seat #${s.seatNumber} • ` : ''}{s.fullName} ({s.status === 'active' ? 'Active' : 'Inactive'})
+                    </option>
+                  ))
               )}
             </select>
           </div>

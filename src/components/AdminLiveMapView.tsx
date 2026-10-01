@@ -10,6 +10,7 @@ import {
   Compass,
   AlertCircle,
   Eye,
+  Armchair,
 } from 'lucide-react';
 import { api } from '../services/api';
 import type { AttendanceSession, SessionLocationPoint, GeofenceSettings } from '../types';
@@ -221,7 +222,7 @@ export function AdminLiveMapView() {
         const marker = L.marker(latLng, { icon, zIndexOffset: isSelected ? 1000 : 500 })
           .addTo(map)
           .bindPopup(
-            `<strong>${sess.studentName}</strong><br/>IN: ${new Date(
+            `<strong>${sess.seatNumberSnapshot != null ? `Seat #${sess.seatNumberSnapshot} &bull; ` : ''}${sess.studentName}</strong><br/>IN: ${new Date(
               sess.inTimestamp
             ).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}<br/>Accuracy: &plusmn;${Math.round(
               loc.accuracy || 10
@@ -343,13 +344,20 @@ export function AdminLiveMapView() {
             </div>
           ) : (
             <div className="space-y-2.5 max-h-[500px] overflow-y-auto pr-1">
-              {activeSessions.map((sess) => {
+              {[...activeSessions]
+                .sort((a, b) => {
+                  const seatA = typeof a.seatNumberSnapshot === 'number' && !isNaN(a.seatNumberSnapshot) ? a.seatNumberSnapshot : 999999;
+                  const seatB = typeof b.seatNumberSnapshot === 'number' && !isNaN(b.seatNumberSnapshot) ? b.seatNumberSnapshot : 999999;
+                  if (seatA !== seatB) return seatA - seatB;
+                  return a.studentName.localeCompare(b.studentName);
+                })
+                .map((sess) => {
                 const isSelected = sess.id === selectedSessionId;
                 const loc = sess.lastLocation || sess.inLocation;
                 const pointsCount = (sessionRoutes[sess.id] || []).length;
                 const elapsedMins = Math.max(
                   0,
-                  Math.round((Date.now() - new Date(sess.inTimestamp).getTime()) / (1000 * 60))
+                  Math.floor((Date.now() - new Date(sess.inTimestamp).getTime()) / (1000 * 60))
                 );
 
                 return (
@@ -367,12 +375,24 @@ export function AdminLiveMapView() {
                   >
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
-                        <span className="font-extrabold text-stone-900 text-sm">
-                          {sess.studentName}
-                        </span>
+                        <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                        <div>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {sess.seatNumberSnapshot != null ? (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300 text-[10px] font-bold font-mono">
+                                <Armchair className="w-3 h-3 text-amber-700" />
+                                <span>Seat #{sess.seatNumberSnapshot}</span>
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-stone-400 font-mono">Seat: —</span>
+                            )}
+                            <span className="font-extrabold text-stone-900 text-sm">
+                              {sess.studentName}
+                            </span>
+                          </div>
+                        </div>
                       </div>
-                      <span className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 text-[10px] font-bold">
+                      <span className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 text-[10px] font-bold shrink-0">
                         INSIDE
                       </span>
                     </div>
@@ -443,8 +463,13 @@ export function AdminLiveMapView() {
               <div className="absolute bottom-3 left-3 right-3 z-10 pointer-events-none">
                 <div className="pointer-events-auto bg-stone-900/90 backdrop-blur-md text-white px-4 py-2.5 rounded-xl border border-stone-700/60 shadow-xl flex flex-wrap items-center justify-between gap-3 text-xs">
                   <div>
-                    <div className="font-extrabold text-sm text-amber-400">
-                      {selectedSession.studentName}
+                    <div className="font-extrabold text-sm text-amber-400 flex items-center gap-1.5">
+                      {selectedSession.seatNumberSnapshot != null && (
+                        <span className="bg-amber-400/20 text-amber-300 px-2 py-0.5 rounded text-xs border border-amber-400/30 font-mono">
+                          Seat #{selectedSession.seatNumberSnapshot}
+                        </span>
+                      )}
+                      <span>{selectedSession.studentName}</span>
                     </div>
                     <div className="text-[11px] text-stone-300 mt-0.5">
                       Session started at{' '}

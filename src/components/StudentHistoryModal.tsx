@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { X, Calendar, RefreshCw, User, MapPin } from 'lucide-react';
+import { X, Calendar, RefreshCw, User, MapPin, Armchair } from 'lucide-react';
 import { api } from '../services/api';
 import type { StudentHistoryResponse, ActivityEvent } from '../types';
 import { LocationModal } from './LocationModal';
@@ -53,8 +53,16 @@ export function StudentHistoryModal({ studentId, onClose }: StudentHistoryModalP
               <div className="text-xs uppercase font-semibold tracking-wider text-amber-700">
                 Attendance History
               </div>
-              <h3 className="text-base font-bold text-stone-900 tracking-tight">
-                {data?.student.fullName || 'Student Attendance'}
+              <h3 className="text-base font-bold text-stone-900 tracking-tight flex items-center gap-2 flex-wrap">
+                <span>{data?.student.fullName || 'Student Attendance'}</span>
+                {data?.student.seatNumber != null ? (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-950 border border-amber-300 font-mono">
+                    <Armchair className="w-3.5 h-3.5 text-amber-700" />
+                    <span>Seat #{data.student.seatNumber}</span>
+                  </span>
+                ) : (
+                  <span className="text-xs text-stone-400 font-normal">Seat: Unassigned</span>
+                )}
               </h3>
             </div>
           </div>

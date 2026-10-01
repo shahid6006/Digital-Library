@@ -276,14 +276,22 @@ export const api = {
     firstName: string,
     lastName: string,
     password: string,
-    dateOfJoining?: string
+    dateOfJoining?: string,
+    seatNumber?: number | string
   ): Promise<{ success: boolean; message: string; student: StudentInfo }> {
-    const student = await firebaseService.addStudent(firstName, lastName, password, dateOfJoining);
+    const student = await firebaseService.addStudent(firstName, lastName, password, dateOfJoining, seatNumber);
     return {
       success: true,
-      message: `Student "${student.fullName}" added successfully.`,
+      message: `Student "${student.fullName}" added successfully (Seat #${student.seatNumber || seatNumber}).`,
       student,
     };
+  },
+
+  async updateStudentSeatNumber(
+    studentId: string,
+    seatNumber: number | string
+  ): Promise<{ success: boolean; message: string; seatNumber: number }> {
+    return firebaseService.updateStudentSeatNumber(studentId, seatNumber);
   },
 
   async deleteStudent(
@@ -361,6 +369,8 @@ export const api = {
     category: NotificationCategory;
     priority?: NotificationPriority;
     createdBy?: string;
+    dedupKey?: string;
+    metadata?: any;
   }): Promise<NotificationItem> {
     return firebaseService.createNotification(params);
   },

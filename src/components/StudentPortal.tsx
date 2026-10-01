@@ -23,6 +23,7 @@ import {
   Wifi,
   WifiOff,
   Volume2,
+  Armchair,
 } from 'lucide-react';
 import { api } from '../services/api';
 import { notificationService } from '../services/notificationService';
@@ -226,12 +227,10 @@ export function StudentPortal({ student, onLogout, onStatusChange }: StudentPort
     return () => unsub();
   }, []);
 
-  // Request notification permission once on mount if supported
+  // Update notification permission state if changed
   useEffect(() => {
-    if (notificationService.isSupported() && !notificationService.hasBeenRequested()) {
-      notificationService.requestPermission().then((perm) => {
-        setNotificationPermission(perm);
-      });
+    if (notificationService.isSupported()) {
+      setNotificationPermission(notificationService.getPermission());
     }
   }, []);
 
@@ -535,7 +534,36 @@ export function StudentPortal({ student, onLogout, onStatusChange }: StudentPort
             }
             setGeofenceStudentState('OUTSIDE');
           } else {
-            // Student is inside geofence! 1-Minute Dwell Requirement (Requirement 1, 2, 5, 7)
+            // Student is inside geofence!
+            // FEATURE 1: First manual IN of the day
+            if (!isFirstManualInDoneTodayRef.current) {
+              const todayKey = new Date().toISOString().split('T')[0];
+              const notified = notificationService.maybeNotifyFirstManualIn(todayKey, () => {
+                api.sendNotification({
+                  recipientType: 'STUDENT',
+                  recipientStudentId: student.id,
+                  recipientStudentName: student.fullName,
+                  title: 'Library Attendance',
+                  message: "You're inside the library attendance area. Press IN to record your first entry today.",
+                  category: 'ATTENDANCE',
+                  priority: 'normal',
+                  createdBy: 'Geofence System',
+                  dedupKey: `first_in_${student.id}_${todayKey}`,
+                }).catch(() => {});
+              });
+
+              if (notified) {
+                setFeedback({
+                  type: 'info',
+                  message: "You're inside the library attendance area. Press IN to record your first entry today.",
+                });
+              }
+
+              setGeofenceStudentState('INSIDE');
+              return;
+            }
+
+            // AFTER FIRST MANUAL IN: Automatic geofence attendance takes over with dwell verification
             setGeofenceStudentState('WAITING_FOR_DWELL');
 
             const currentTrustedMs = Date.now() + clockOffsetMsRef.current;
@@ -1170,8 +1198,18 @@ export function StudentPortal({ student, onLogout, onStatusChange }: StudentPort
                 </span>
               )}
             </div>
-            <h2 className="text-2xl font-extrabold text-stone-900 tracking-tight">
-              Welcome, {student.fullName}
+            <h2 className="text-2xl font-extrabold text-stone-900 tracking-tight flex items-center gap-2.5 flex-wrap">
+              <span>Welcome, {student.fullName}</span>
+              {student.seatNumber != null ? (
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-950 border border-amber-300 font-mono shadow-2xs">
+                  <Armchair className="w-3.5 h-3.5 text-amber-700" />
+                  <span>Seat #{student.seatNumber}</span>
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-stone-100 text-stone-500 border border-stone-200">
+                  Seat: Unassigned
+                </span>
+              )}
             </h2>
           </div>
 
